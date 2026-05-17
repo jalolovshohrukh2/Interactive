@@ -46,11 +46,3 @@ input[type=number]::-webkit-outer-spin-button {
   background: #3a3a3c;
 }
 
-/* Selection outline — marching ants. Slows / speeds via animation-duration
-   set inline by the caller; opacity stays 1, the dash slides. */
-@keyframes marching-ants {
-  to { stroke-dashoffset: -1; }
-}
-.marching-ants {
-  animation: marching-ants 1s linear infinite;
-}

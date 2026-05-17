@@ -79,26 +79,20 @@ function bgPathFor(shape, W, H) {
 
 function buildGlowRules(spotlight, fill, glow) {
   if (!(glow > 0)) return [];
-  // Animation speed scales with glow strength so the editor preview matches.
-  const duration = Math.max(0.4, 2.5 - glow * 1.7).toFixed(2);
-  const strokeW = (1 + glow * 1.5).toFixed(2);
-  const haloR = (2 + glow * 5).toFixed(1);
-  const haloAlpha = (glow * 0.7).toFixed(2);
-  const dashOn = (6).toFixed(0);
-  const dashOff = (4).toFixed(0);
+  // Subtle gray hover outline. Alpha scales with the slider; 0 = no outline,
+  // 1 = "almost not visible but there if you look". No animation, no halo —
+  // just a hint that the shape is interactive.
+  const alpha = (glow * 0.35).toFixed(2);
 
   const allHover = [...spotlight.keys(), ...fill.keys()].map((c) => `.${c}:hover`).join(', ');
   const rules = [
-    `      @keyframes ii-march { to { stroke-dashoffset: -10; } }`,
-    `      ${allHover} {\n        stroke: #a855f7;\n        stroke-width: ${strokeW};\n        stroke-dasharray: ${dashOn} ${dashOff};\n        animation: ii-march ${duration}s linear infinite;\n        filter: drop-shadow(0 0 ${haloR}px rgba(168, 85, 247, ${haloAlpha}));\n      }`,
+    `      ${allHover} {\n        stroke: rgba(160, 160, 160, ${alpha});\n        stroke-width: 1;\n      }`,
   ];
   // Spotlight shapes are opacity: 0 by default. Force the element visible on
   // hover (with the fill kept transparent) so the stroke can render.
   if (spotlight.size) {
     const spotHover = [...spotlight.keys()].map((c) => `.${c}:hover`).join(', ');
-    rules.push(
-      `      ${spotHover} { opacity: 1; fill-opacity: 0; }`
-    );
+    rules.push(`      ${spotHover} { opacity: 1; fill-opacity: 0; }`);
   }
   return rules;
 }

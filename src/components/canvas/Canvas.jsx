@@ -98,6 +98,7 @@ export default function Canvas({
               mode={mode}
               onHover={setHoveredId}
               displayScale={displayScale}
+              glow={glow}
             />
           ))}
           {mode === 'edit' && selectedIds.length > 0 && (
@@ -105,7 +106,6 @@ export default function Canvas({
               shapes={shapes}
               selectedIds={selectedIds}
               displayScale={displayScale}
-              glow={glow}
             />
           )}
           {draft && <DraftRender draft={draft} cursor={cursor} displayScale={displayScale} />}

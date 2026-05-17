@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useProject } from './hooks/useProject.js';
 import { useDrawing } from './hooks/useDrawing.js';
 import { useKeyboard } from './hooks/useKeyboard.js';
@@ -10,7 +10,6 @@ import { cloneShape } from './lib/shapes.js';
 import Header from './components/Header.jsx';
 import Toolbar from './components/Toolbar.jsx';
 import StatusBar from './components/StatusBar.jsx';
-import ExportModal from './components/ExportModal.jsx';
 import ShortcutsOverlay from './components/ShortcutsOverlay.jsx';
 import Canvas from './components/canvas/Canvas.jsx';
 import EmptyCanvas from './components/canvas/EmptyCanvas.jsx';
@@ -92,7 +91,6 @@ export default function App() {
     finishPolyDraft: drawing.finishPolyDraft,
     onUndo: handleUndo,
     onCopy: handleCopy,
-    onPaste: handlePaste,
     onDuplicate: handleDuplicate,
     onNudge: drawing.nudgeSelected,
     onZoomIn: viewport.zoomIn,
@@ -101,8 +99,18 @@ export default function App() {
     onShowShortcuts: () => setShortcutsOpen(true),
   });
 
-  const [exportText, setExportText] = useState(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState('shapes');
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem('interactive-image:sidebarWidth'));
+      return Number.isFinite(v) && v >= 240 && v <= 800 ? v : 320;
+    } catch { return 320; }
+  });
+  const updateSidebarWidth = useCallback((w) => {
+    setSidebarWidth(w);
+    try { localStorage.setItem('interactive-image:sidebarWidth', String(w)); } catch {}
+  }, []);
   // Selection-glow intensity (0..1). Purely editor-side; not exported.
   // Persisted to its own localStorage key so it survives reloads.
   const [glow, setGlow] = useState(() => {
@@ -122,11 +130,10 @@ export default function App() {
     e.target.value = '';
   };
 
-  const handleImportSvg = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    const text = await file.text();
+  // Shared by file-upload import AND clipboard-paste import.
+  // Shows a confirm() dialog when there's already work on the canvas, so the
+  // user doesn't accidentally wipe it out from a stray paste.
+  const importSvgText = useCallback((text) => {
     try {
       const parsed = importSvg(text);
       const replace = project.shapes.length > 0
@@ -135,7 +142,6 @@ export default function App() {
           )
         : true;
       if (!replace) return;
-      // If no image is loaded yet, drop a placeholder at the imported viewBox.
       if (!project.image) {
         project.setImageRaw(blankImage(parsed.width, parsed.height));
       }
@@ -144,18 +150,68 @@ export default function App() {
     } catch (err) {
       alert('Could not parse SVG: ' + err.message);
     }
+  }, [project, drawing]);
+
+  // Silent apply — used by the Code-panel textarea where the user is
+  // actively editing markup. No confirm; if a typo blows away shapes the
+  // user can Ctrl+Z. Throws on parse failure so CodePanel can flash its
+  // status dot red.
+  const applySvgText = useCallback((text) => {
+    const parsed = importSvg(text);
+    if (!project.image) {
+      project.setImageRaw(blankImage(parsed.width, parsed.height));
+    }
+    project.replaceShapes(parsed.shapes);
+    drawing.clearSelection();
+  }, [project, drawing]);
+
+  const handleImportSvg = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const text = await file.text();
+    importSvgText(text);
   };
 
-  const handleExport = () => {
-    if (!project.image) return;
-    const text = exportSvg({
+  // Listen for clipboard paste anywhere in the app. Two cases:
+  //   1. Pasted text looks like SVG → import it as a new project.
+  //   2. Internal clipboard has shapes → paste-as-duplicate (existing behavior).
+  // We listen on document so it works regardless of focus, but skip when the
+  // user is typing into a form field (they want the input to handle paste).
+  useEffect(() => {
+    const looksLikeSvg = (t) => /^\s*<(?:\?xml|svg)/i.test(t);
+    const onPaste = (e) => {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const text = e.clipboardData?.getData('text/plain') || '';
+      if (text && looksLikeSvg(text)) {
+        e.preventDefault();
+        importSvgText(text);
+        return;
+      }
+      if (clipboardRef.current.length > 0) {
+        e.preventDefault();
+        handlePaste();
+      }
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [importSvgText, handlePaste]);
+
+  // Live SVG export — regenerates whenever shapes / image / glow change.
+  // The Code tab in the sidebar mirrors this string in real time.
+  const exportText = useMemo(() => {
+    if (!project.image) return '';
+    return exportSvg({
       width: project.image.width,
       height: project.image.height,
       shapes: project.shapes,
       glow,
     });
-    setExportText(text);
-  };
+  }, [project.image, project.shapes, glow]);
+
+  // The "Export SVG" header button just switches the sidebar to the Code tab.
+  const handleExport = () => setSidebarTab('code');
 
   const handleClear = () => {
     if (!confirm('Clear image and all shapes? This cannot be undone.')) return;
@@ -238,14 +294,18 @@ export default function App() {
           onReorder={project.reorderShape}
           glow={glow}
           onGlowChange={updateGlow}
+          tab={sidebarTab}
+          onTabChange={setSidebarTab}
+          exportText={exportText}
+          onApplyCode={applySvgText}
+          canExport={canExport}
+          width={sidebarWidth}
+          onWidthChange={updateSidebarWidth}
           onClear={handleClear}
           hasImage={hasImage}
         />
       </div>
 
-      {exportText !== null && (
-        <ExportModal text={exportText} onClose={() => setExportText(null)} />
-      )}
       {shortcutsOpen && <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />}
     </div>
   );

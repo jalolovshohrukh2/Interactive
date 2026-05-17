@@ -12,7 +12,6 @@ export function useKeyboard({
   finishPolyDraft,
   onUndo,
   onCopy,
-  onPaste,
   onDuplicate,
   onNudge,
   onZoomIn,
@@ -34,9 +33,9 @@ export function useKeyboard({
       if (ctrl && (e.key === 'c' || e.key === 'C')) {
         e.preventDefault(); onCopy?.(); return;
       }
-      if (ctrl && (e.key === 'v' || e.key === 'V')) {
-        e.preventDefault(); onPaste?.(); return;
-      }
+      // Ctrl+V is intentionally NOT handled here — we want the native paste
+      // event to fire, so the document-level paste listener can read the
+      // clipboard and decide between SVG-import and shape-paste.
       if (ctrl && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault(); onDuplicate?.(); return;
       }
@@ -96,7 +95,7 @@ export function useKeyboard({
     return () => window.removeEventListener('keydown', onKey);
   }, [
     draft, hasSelection, deleteSelected, cancelDraft, switchTool, finishPolyDraft,
-    onUndo, onCopy, onPaste, onDuplicate, onNudge,
+    onUndo, onCopy, onDuplicate, onNudge,
     onZoomIn, onZoomOut, onResetZoom, onShowShortcuts,
   ]);
 }

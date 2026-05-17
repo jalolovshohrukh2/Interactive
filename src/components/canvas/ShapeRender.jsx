@@ -1,14 +1,22 @@
 import SpotlightMask from './SpotlightMask.jsx';
 
 // Renders a single shape on the editor canvas.
-// In "edit" mode shows the bounds in violet so the user can see them.
-// In "preview" mode emulates the exported SVG: transparent (spotlight pattern)
-// or solid fill that swaps on hover (fill pattern). For spotlight previews
-// it also paints the punch-out mask on hover.
 //
-// Stroke widths are divided by displayScale so they stay constant in screen
-// pixels at any zoom.
-export default function ShapeRender({ shape, isSelected, isHovered, mode, onHover, displayScale = 1 }) {
+// Edit mode: shows the shape's outline in violet (or fill swatch for
+// fill-pattern shapes) so the user can see the geometry they're working on.
+//
+// Preview mode: emulates the exported SVG.
+//   - Spotlight shapes are transparent at rest; on hover, SpotlightMask
+//     darkens everything else.
+//   - Fill shapes swap fill on hover.
+//   - On hover, both shape types ALSO get a marching-ants stroke and a
+//     violet drop-shadow halo, scaled by the global `glow` slider. This
+//     matches the CSS we emit into the exported file, so what you see
+//     in preview is what end users will see.
+//
+// Stroke widths and animation values divide by displayScale so on-screen
+// thickness is constant regardless of zoom.
+export default function ShapeRender({ shape, isSelected, isHovered, mode, onHover, displayScale = 1, glow = 0 }) {
   const editFill = shape.hover === 'fill'
     ? (shape.fill || '#c4c4c4')
     : (isHovered ? 'rgba(168, 85, 247, 0.18)' : 'rgba(99, 102, 241, 0.12)');
@@ -18,20 +26,36 @@ export default function ShapeRender({ shape, isSelected, isHovered, mode, onHove
     : 'transparent';
 
   const fill = mode === 'edit' ? editFill : previewFill;
-  const stroke = mode === 'edit'
-    ? (isSelected ? '#a855f7' : isHovered ? '#c084fc' : '#6366f1')
-    : 'transparent';
+  const editStroke = isSelected ? '#a855f7' : isHovered ? '#c084fc' : '#6366f1';
   const baseSW = isSelected ? 3 : 2;
-  const strokeWidth = mode === 'edit' ? baseSW / displayScale : 0;
 
-  const common = {
+  // Preview-mode hover effect — mirrors the exported CSS. A thin static
+  // gray outline, alpha scales with the slider. No animation, no halo —
+  // the goal is a barely-visible affordance, not a visual effect.
+  const showHoverGlow = mode === 'preview' && isHovered && glow > 0;
+  const glowProps = showHoverGlow
+    ? {
+        stroke: `rgba(160, 160, 160, ${(glow * 0.35).toFixed(2)})`,
+        strokeWidth: 1 / displayScale,
+        style: { cursor: 'pointer' },
+      }
+    : null;
+
+  // Default (edit mode or preview without hover glow)
+  const baseProps = {
     fill,
-    stroke,
-    strokeWidth,
+    stroke: mode === 'edit' ? editStroke : 'transparent',
+    strokeWidth: mode === 'edit' ? baseSW / displayScale : 0,
+    style: { cursor: 'pointer' },
+  };
+
+  // Glow props override stroke + style when active.
+  const common = {
+    ...(glowProps || baseProps),
+    fill, // preserve fill computed above (don't let glowProps clobber it)
     'data-shape-id': shape.id,
     onMouseEnter: () => onHover(shape.id),
     onMouseLeave: () => onHover(null),
-    style: { cursor: 'pointer' },
   };
 
   const showSpotlight = mode === 'preview' && shape.hover === 'spotlight' && isHovered;
@@ -53,8 +77,16 @@ export default function ShapeRender({ shape, isSelected, isHovered, mode, onHove
           {...common}
           points={shape.points.map((p) => p.join(',')).join(' ')}
           fill="none"
-          stroke={mode === 'edit' ? stroke : (shape.fill || '#c4c4c4')}
-          strokeWidth={mode === 'edit' ? (isSelected ? 4 : 3) / displayScale : 3 / displayScale}
+          stroke={
+            showHoverGlow ? glowProps.stroke
+            : mode === 'edit' ? editStroke
+            : (shape.fill || '#c4c4c4')
+          }
+          strokeWidth={
+            showHoverGlow ? glowProps.strokeWidth
+            : mode === 'edit' ? (isSelected ? 4 : 3) / displayScale
+            : 3 / displayScale
+          }
         />
       )}
     </g>
