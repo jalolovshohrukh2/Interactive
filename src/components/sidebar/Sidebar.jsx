@@ -62,9 +62,12 @@ export default function Sidebar({
         title="Drag to resize"
         className="absolute top-0 left-0 w-1.5 h-full -ml-0.5 z-20 cursor-col-resize hover:bg-violet-500/40 active:bg-violet-500/60 transition-colors"
       />
-      <div className="flex border-b border-[#1f1f22] flex-shrink-0">
-        <TabBtn active={tab === 'shapes'} onClick={() => onTabChange('shapes')} Icon={Layers} label="Shapes" count={shapes.length} />
-        <TabBtn active={tab === 'code'} onClick={() => onTabChange('code')} Icon={Code2} label="Code" />
+      <div className="px-3 pt-3 pb-2 flex-shrink-0">
+        <SegmentedTabs
+          tab={tab}
+          onTabChange={onTabChange}
+          shapeCount={shapes.length}
+        />
       </div>
 
       {tab === 'shapes' ? (
@@ -109,20 +112,55 @@ export default function Sidebar({
   );
 }
 
-function TabBtn({ active, onClick, Icon, label, count }) {
+// iOS-style segmented control. A "pill" sits inside each half with a small
+// inset; clicking the other segment slides the pill across with a smooth
+// cubic-bezier easing. The pill is an inner div wrapped in a sliding
+// container so we can apply both the position transform AND a uniform
+// inset on all four sides without arithmetic gymnastics.
+function SegmentedTabs({ tab, onTabChange, shapeCount }) {
+  const activeIdx = tab === 'shapes' ? 0 : 1;
+  return (
+    <div className="relative h-10 rounded-lg bg-[#0a0a0c] border border-[#26262a] flex">
+      <div
+        className="absolute inset-y-0 left-0 w-1/2 p-1 pointer-events-none"
+        style={{
+          transform: `translateX(${activeIdx * 100}%)`,
+          transition: 'transform 220ms cubic-bezier(0.4, 0, 0.2, 1)',
+        }}
+      >
+        <div className="h-full rounded-md bg-[#26262a] border border-[#3a3a3e] shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
+      </div>
+      <Seg
+        active={tab === 'shapes'}
+        onClick={() => onTabChange('shapes')}
+        Icon={Layers}
+        label="Shapes"
+        count={shapeCount}
+      />
+      <Seg
+        active={tab === 'code'}
+        onClick={() => onTabChange('code')}
+        Icon={Code2}
+        label="Code"
+      />
+    </div>
+  );
+}
+
+function Seg({ active, onClick, Icon, label, count }) {
   return (
     <button
       onClick={onClick}
-      className={`flex-1 h-10 px-3 flex items-center justify-center gap-2 text-[12px] font-medium border-b-2 transition-colors ${
-        active
-          ? 'border-violet-500 text-white bg-violet-500/5'
-          : 'border-transparent text-[#8a8a90] hover:text-white hover:bg-[#1a1a1d]'
+      className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 text-[12px] font-medium transition-colors ${
+        active ? 'text-white' : 'text-[#8a8a90] hover:text-white'
       }`}
     >
       <Icon size={13} />
       <span>{label}</span>
       {count !== undefined && (
-        <span className="text-[10px] font-mono text-[#6a6a70]">{count}</span>
+        <span className={`text-[10px] font-mono transition-colors ${active ? 'text-[#c4c4c8]' : 'text-[#6a6a70]'}`}>
+          {count}
+        </span>
       )}
     </button>
   );
