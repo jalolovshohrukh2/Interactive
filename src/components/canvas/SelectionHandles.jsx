@@ -32,13 +32,19 @@ export default function SelectionHandles({ shapes, selectedIds, displayScale = 1
   const shape = shapes.find((s) => s.id === selectedIds[0]);
   if (!shape) return null;
 
+  // Bounding shapes (rect / ellipse) get a dashed bounding outline — the
+  // dashing reads as "this is a selection box around the shape." Path shapes
+  // (polygon / polyline) get a SOLID outline tracing the actual edges, so
+  // the lines between vertex dots are clearly visible like an Illustrator
+  // path. Vertex dots sit on top of the solid line.
+  const isPath = shape.type === 'polygon' || shape.type === 'polyline';
   return (
     <g>
       <OutlineShape
         shape={shape}
         stroke="#a855f7"
-        strokeWidth={sw}
-        strokeDasharray={dash}
+        strokeWidth={isPath ? 1.5 / displayScale : sw}
+        strokeDasharray={isPath ? undefined : dash}
         pointerEvents="none"
       />
       {shape.type === 'rect' && rectHandles(shape).map((h) => (
@@ -47,7 +53,7 @@ export default function SelectionHandles({ shapes, selectedIds, displayScale = 1
       {shape.type === 'ellipse' && ellipseHandles(shape).map((h) => (
         <Handle key={h.handle} {...h} shapeId={shape.id} size={handleSize} sw={sw} />
       ))}
-      {(shape.type === 'polygon' || shape.type === 'polyline') &&
+      {isPath &&
         shape.points.map(([x, y], i) => (
           <circle
             key={i}

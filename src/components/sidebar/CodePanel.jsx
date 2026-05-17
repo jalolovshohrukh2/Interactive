@@ -22,10 +22,21 @@ export default function CodePanel({ text, onApply, fileName = 'interactive-image
   const focusedRef = useRef(false);
   const timerRef = useRef(null);
 
+  // Local undo / redo stacks for the textarea. React controlled inputs
+  // wipe the browser's native undo state, so we keep our own.
+  // Cap at 200 entries to avoid unbounded growth.
+  const undoStackRef = useRef([]);
+  const redoStackRef = useRef([]);
+  const MAX_HISTORY = 200;
+
   useEffect(() => {
     if (!focusedRef.current) {
       setLocal(text);
       setStatus('idle');
+      // Snapshot from outside (canvas edits) shouldn't be undoable
+      // through the textarea's own stack.
+      undoStackRef.current = [];
+      redoStackRef.current = [];
     }
   }, [text]);
 
@@ -47,11 +58,55 @@ export default function CodePanel({ text, onApply, fileName = 'interactive-image
     }
   };
 
+  const pushUndo = (prev) => {
+    const stack = undoStackRef.current;
+    if (stack[stack.length - 1] === prev) return; // dedupe rapid identical
+    stack.push(prev);
+    if (stack.length > MAX_HISTORY) stack.shift();
+    redoStackRef.current = []; // new edit invalidates redo
+  };
+
   const onChange = (e) => {
     const v = e.target.value;
+    pushUndo(local);
     setLocal(v);
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => tryApply(v), APPLY_DEBOUNCE_MS);
+  };
+
+  const undo = () => {
+    const stack = undoStackRef.current;
+    if (!stack.length) return;
+    redoStackRef.current.push(local);
+    const prev = stack.pop();
+    setLocal(prev);
+    // Apply the reverted text so canvas stays in sync with what's shown.
+    if (timerRef.current) clearTimeout(timerRef.current);
+    tryApply(prev);
+  };
+
+  const redo = () => {
+    const stack = redoStackRef.current;
+    if (!stack.length) return;
+    undoStackRef.current.push(local);
+    const next = stack.pop();
+    setLocal(next);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    tryApply(next);
+  };
+
+  const onKeyDown = (e) => {
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (!ctrl) return;
+    if ((e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      undo();
+    } else if (((e.key === 'z' || e.key === 'Z') && e.shiftKey) || e.key === 'y' || e.key === 'Y') {
+      e.preventDefault();
+      e.stopPropagation();
+      redo();
+    }
   };
 
   const onFocus = () => { focusedRef.current = true; };
@@ -107,6 +162,7 @@ export default function CodePanel({ text, onApply, fileName = 'interactive-image
       <textarea
         value={local}
         onChange={onChange}
+        onKeyDown={onKeyDown}
         onFocus={onFocus}
         onBlur={onBlur}
         spellCheck={false}

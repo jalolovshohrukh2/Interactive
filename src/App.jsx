@@ -292,6 +292,7 @@ export default function App() {
           onDeleteSelected={handleDeleteSelected}
           onDuplicateSelected={handleDuplicate}
           onReorder={project.reorderShape}
+          onMoveShape={project.moveShape}
           glow={glow}
           onGlowChange={updateGlow}
           tab={sidebarTab}

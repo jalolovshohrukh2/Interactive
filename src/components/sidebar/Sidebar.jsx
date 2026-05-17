@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Trash2, Copy, Layers, Code2 } from 'lucide-react';
 import ShapeRow from './ShapeRow.jsx';
 import DetailPanel from './DetailPanel.jsx';
@@ -18,7 +19,7 @@ const MAX_WIDTH = 720;
 export default function Sidebar({
   shapes, selectedIds,
   onSelect, onDelete, onUpdate, onClear,
-  onDeleteSelected, onDuplicateSelected, onReorder,
+  onDeleteSelected, onDuplicateSelected, onReorder, onMoveShape,
   glow, onGlowChange,
   tab, onTabChange, exportText, onApplyCode, canExport,
   width, onWidthChange,
@@ -74,6 +75,7 @@ export default function Sidebar({
           onDelete={onDelete}
           onUpdate={onUpdate}
           onReorder={onReorder}
+          onMoveShape={onMoveShape}
           onDeleteSelected={onDeleteSelected}
           onDuplicateSelected={onDuplicateSelected}
           onlyOne={onlyOne}
@@ -127,7 +129,7 @@ function TabBtn({ active, onClick, Icon, label, count }) {
 }
 
 function ShapesTab({
-  shapes, selectedSet, onSelect, onDelete, onUpdate, onReorder,
+  shapes, selectedSet, onSelect, onDelete, onUpdate, onReorder, onMoveShape,
   onDeleteSelected, onDuplicateSelected, onlyOne, multiCount, hasImage,
 }) {
   return (
@@ -138,6 +140,7 @@ function ShapesTab({
         onSelect={onSelect}
         onDelete={onDelete}
         onUpdate={onUpdate}
+        onMoveShape={onMoveShape}
         hasImage={hasImage}
       />
 
@@ -176,7 +179,51 @@ function ShapesTab({
   );
 }
 
-function ShapeList({ shapes, selectedSet, onSelect, onDelete, onUpdate, hasImage }) {
+function ShapeList({ shapes, selectedSet, onSelect, onDelete, onUpdate, onMoveShape, hasImage }) {
+  // HTML5 drag-and-drop reorder.
+  // dragIdx = which row was picked up
+  // overIdx + overPos = where it'll drop (before or after the hovered row)
+  const [dragIdx, setDragIdx] = useState(null);
+  const [overIdx, setOverIdx] = useState(null);
+  const [overPos, setOverPos] = useState('before');
+
+  const onDragStart = (e, i) => {
+    setDragIdx(i);
+    e.dataTransfer.effectAllowed = 'move';
+    // Required for Firefox to start the drag at all.
+    try { e.dataTransfer.setData('text/plain', String(i)); } catch {}
+  };
+
+  const onDragOver = (e, i) => {
+    if (dragIdx === null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const r = e.currentTarget.getBoundingClientRect();
+    const pos = (e.clientY - r.top) < r.height / 2 ? 'before' : 'after';
+    if (overIdx !== i || overPos !== pos) {
+      setOverIdx(i);
+      setOverPos(pos);
+    }
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    if (dragIdx !== null && overIdx !== null && onMoveShape) {
+      // Convert (hover-row, before/after) into a target index. If we're
+      // moving downward we need to compensate for the removed source.
+      let to = overPos === 'before' ? overIdx : overIdx + 1;
+      if (to > dragIdx) to -= 1;
+      if (to !== dragIdx) onMoveShape(shapes[dragIdx].id, to);
+    }
+    setDragIdx(null);
+    setOverIdx(null);
+  };
+
+  const onDragEnd = () => {
+    setDragIdx(null);
+    setOverIdx(null);
+  };
+
   return (
     <div className="flex flex-col min-h-0 flex-1">
       <div className="overflow-y-auto flex-1 min-h-0">
@@ -185,16 +232,35 @@ function ShapeList({ shapes, selectedSet, onSelect, onDelete, onUpdate, hasImage
             {hasImage ? 'Pick a tool and start drawing' : 'Upload an image to begin'}
           </div>
         ) : (
-          shapes.map((s) => (
-            <ShapeRow
-              key={s.id}
-              shape={s}
-              active={selectedSet.has(s.id)}
-              onSelect={onSelect}
-              onDelete={() => onDelete(s.id)}
-              onUpdate={onUpdate}
-            />
-          ))
+          shapes.map((s, i) => {
+            const showIndicator = overIdx === i && dragIdx !== null && dragIdx !== i;
+            return (
+              <div
+                key={s.id}
+                draggable
+                onDragStart={(e) => onDragStart(e, i)}
+                onDragOver={(e) => onDragOver(e, i)}
+                onDrop={onDrop}
+                onDragEnd={onDragEnd}
+                className={`relative ${dragIdx === i ? 'opacity-40' : ''}`}
+                style={{ cursor: 'grab' }}
+              >
+                {showIndicator && overPos === 'before' && (
+                  <div className="absolute top-0 left-0 right-0 h-0.5 bg-violet-500 z-10 pointer-events-none" />
+                )}
+                <ShapeRow
+                  shape={s}
+                  active={selectedSet.has(s.id)}
+                  onSelect={onSelect}
+                  onDelete={() => onDelete(s.id)}
+                  onUpdate={onUpdate}
+                />
+                {showIndicator && overPos === 'after' && (
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-violet-500 z-10 pointer-events-none" />
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>

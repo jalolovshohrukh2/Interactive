@@ -100,6 +100,23 @@ export function useProject() {
 
   const deleteShape = useCallback((id) => commit((arr) => arr.filter((s) => s.id !== id)), [commit]);
 
+  // Move a shape to an explicit index — used by sidebar drag-and-drop.
+  // `toIndex` is the desired final position in the shapes array (0 = back).
+  const moveShape = useCallback(
+    (id, toIndex) =>
+      commit((arr) => {
+        const from = arr.findIndex((s) => s.id === id);
+        if (from < 0) return arr;
+        const next = [...arr];
+        const [item] = next.splice(from, 1);
+        const insertAt = Math.max(0, Math.min(next.length, toIndex));
+        if (insertAt === from) return arr;
+        next.splice(insertAt, 0, item);
+        return next;
+      }),
+    [commit]
+  );
+
   // Z-order. Array index = render order (later = on top). `action` is one of
   // 'front', 'back', 'forward', 'backward'.
   const reorderShape = useCallback(
@@ -152,6 +169,7 @@ export function useProject() {
     updateShape,
     deleteShape,
     reorderShape,
+    moveShape,
     setShapesLive,
     pushHistory,
     undo,

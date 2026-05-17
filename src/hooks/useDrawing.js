@@ -10,7 +10,7 @@ import {
 } from '../lib/shapes.js';
 import { CLOSE_POLYGON_THRESHOLD, MIN_SHAPE_SIZE } from '../constants.js';
 
-const SNAP_THRESHOLD_PX = 6;
+const SNAP_THRESHOLD_PX = 10;
 
 // Returns true if two axis-aligned bounding boxes overlap (any intersection).
 const bboxIntersects = (a, b) =>
@@ -275,8 +275,17 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
       return;
     }
     if (interaction?.type === 'vertex') {
+      // Snap to: other shapes + the OTHER vertices of THIS same polygon
+      // (excluding the vertex currently being dragged, since it would
+      // snap to its own un-moved old position).
       const others = shapes.filter((s) => s.id !== interaction.original.id);
-      const candidates = buildCandidates(others, image.width, image.height);
+      const sameShapeOtherPoints = (interaction.original.points || [])
+        .filter((_, i) => i !== interaction.index);
+      const candidates = buildCandidates(
+        others,
+        image.width, image.height,
+        sameShapeOtherPoints,
+      );
       const snapped = snapPoint({ x: pos.x, y: pos.y, candidates, threshold });
       setShapesLive((arr) =>
         arr.map((s) =>
@@ -359,12 +368,16 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
       return;
     }
     // Double-click on a polygon/polyline edge in select tool → insert a vertex.
+    // Vertex deletion is Alt+click, handled in onMouseDown.
     if (mode === 'edit' && tool === 'select') {
       const dataId = e.target.dataset?.shapeId;
       if (!dataId) return;
       const sh = shapes.find((s) => s.id === dataId);
       if (!sh || sh.locked) return;
       if (sh.type !== 'polygon' && sh.type !== 'polyline') return;
+      // If the user happened to double-click on a vertex dot, ignore — they
+      // probably meant Alt+click. Doing nothing is safer than guessing.
+      if (e.target.dataset?.vertex !== undefined) return;
       const pos = getPos(e);
       const inserted = insertVertexOnEdge(sh, pos);
       if (inserted) {
