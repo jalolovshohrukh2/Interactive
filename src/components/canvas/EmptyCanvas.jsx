@@ -17,6 +17,10 @@ export default function EmptyCanvas({ onUpload }) {
           Choose image
           <input type="file" accept="image/*" onChange={onUpload} className="hidden" />
         </label>
+        <div className="mt-3 text-[12px] text-[#6a6a70]">
+          or drop a file · paste with{' '}
+          <kbd className="font-mono px-1.5 py-0.5 bg-[#1a1a1d] border border-[#26262a] rounded text-[11px] text-[#9a9aa0]">Ctrl+V</kbd>
+        </div>
         <div className="mt-6 text-[10px] uppercase tracking-wider text-[#5a5a60] font-mono">
           PNG · JPG · WebP · SVG · Saved locally
         </div>

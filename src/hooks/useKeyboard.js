@@ -18,6 +18,7 @@ export function useKeyboard({
   onZoomOut,
   onResetZoom,
   onShowShortcuts,
+  toolShortcuts = TOOL_SHORTCUTS,
 }) {
   useEffect(() => {
     const onKey = (e) => {
@@ -88,7 +89,7 @@ export function useKeyboard({
 
       // Plain-key tool shortcuts — skip if any modifier is held.
       if (ctrl || e.altKey || e.shiftKey) return;
-      const toolId = TOOL_SHORTCUTS[e.key.toLowerCase()];
+      const toolId = toolShortcuts[e.key.toLowerCase()];
       if (toolId) switchTool(toolId);
     };
     window.addEventListener('keydown', onKey);
@@ -96,6 +97,6 @@ export function useKeyboard({
   }, [
     draft, hasSelection, deleteSelected, cancelDraft, switchTool, finishPolyDraft,
     onUndo, onCopy, onDuplicate, onNudge,
-    onZoomIn, onZoomOut, onResetZoom, onShowShortcuts,
+    onZoomIn, onZoomOut, onResetZoom, onShowShortcuts, toolShortcuts,
   ]);
 }

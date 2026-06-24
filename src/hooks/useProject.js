@@ -1,65 +1,60 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { loadProject, saveProject } from '../lib/storage.js';
+import { idbGet, idbSet, idbDel } from '../lib/idb.js';
+import { useShapeCollection } from './useShapeCollection.js';
 
-const MAX_HISTORY = 50;
+const IMAGE_KEY = 'image';
 
-// Owns the persisted project (image + shapes) and the in-memory undo stack.
+// Owns the persisted project: the shared background image plus two independent
+// shape collections —
+//   - hotspots: interactive shapes exported as the SVG.
+//   - pieces:   cut regions used by the Cut workspace to slice the image.
 //
-// Two flavors of mutation:
-//   - addShape / deleteShape: snapshot the prev shapes into history, then apply.
-//   - setShapesLive: apply WITHOUT recording history. Used for mid-gesture
-//     mutations (drag-move, resize, vertex drag). The drawing hook calls
-//     pushHistory(snapshot) once when the gesture commits, so the whole
-//     gesture undoes as one step instead of one entry per mousemove.
-//
-// Property edits via the sidebar use updateShape; they don't push history
-// (a per-keystroke stack would be noisy). We can revisit if needed.
+// The two collections never share state or history, which is what keeps the
+// Hotspots and Cut workspaces from bleeding into each other. The flat
+// hotspot API (shapes, addShape, …) is preserved for back-compat with the
+// rest of the app; `hotspots` and `pieces` expose the full collection objects
+// for the parts that need to pick one based on the active workspace.
 export function useProject() {
   const [image, setImage] = useState(null);
-  const [shapes, setShapes] = useState([]);
-  const [past, setPast] = useState([]);
   const [loaded, setLoaded] = useState(false);
 
-  // Always-current ref so commit() can snapshot without re-creating on every shapes change.
-  const shapesRef = useRef(shapes);
-  shapesRef.current = shapes;
+  const hotspots = useShapeCollection([]);
+  const pieces = useShapeCollection([]);
+
+  const { setAll: setHotspots } = hotspots;
+  const { setAll: setPieces } = pieces;
 
   useEffect(() => {
+    let cancelled = false;
     const data = loadProject();
-    if (data?.image) setImage(data.image);
-    if (Array.isArray(data?.shapes)) setShapes(data.shapes);
-    setLoaded(true);
-  }, []);
+    if (Array.isArray(data?.shapes)) setHotspots(data.shapes);
+    if (Array.isArray(data?.pieces)) setPieces(data.pieces);
+    // Image lives in IndexedDB now. Migrate any legacy inline image and then
+    // mark loaded (so the save effects don't fire before we've restored).
+    (async () => {
+      let img = await idbGet(IMAGE_KEY);
+      if (!img && data?.image) { img = data.image; idbSet(IMAGE_KEY, img); }
+      if (cancelled) return;
+      if (img) setImage(img);
+      setLoaded(true);
+    })();
+    return () => { cancelled = true; };
+  }, [setHotspots, setPieces]);
 
+  // Shapes + pieces are small → localStorage. (History is in-memory only.)
   useEffect(() => {
     if (!loaded) return;
-    // History is in-memory only.
-    saveProject({ image, shapes });
-  }, [image, shapes, loaded]);
+    saveProject({ shapes: hotspots.shapes, pieces: pieces.shapes });
+  }, [hotspots.shapes, pieces.shapes, loaded]);
 
-  const pushHistory = useCallback((snapshot) => {
-    setPast((p) => {
-      const next = [...p, snapshot];
-      return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
-    });
-  }, []);
-
-  const commit = useCallback(
-    (updater) => {
-      pushHistory(shapesRef.current);
-      setShapes(updater);
-    },
-    [pushHistory]
-  );
-
-  const undo = useCallback(() => {
-    setPast((p) => {
-      if (!p.length) return p;
-      const last = p[p.length - 1];
-      setShapes(last);
-      return p.slice(0, -1);
-    });
-  }, []);
+  // The image can be several MB → IndexedDB, written only when it changes so
+  // shape edits don't rewrite it.
+  useEffect(() => {
+    if (!loaded) return;
+    if (image) idbSet(IMAGE_KEY, image);
+    else idbDel(IMAGE_KEY);
+  }, [image, loaded]);
 
   const uploadImage = useCallback((file) => {
     return new Promise((resolve, reject) => {
@@ -80,100 +75,52 @@ export function useProject() {
     });
   }, []);
 
-  const addShape = useCallback((s) => commit((arr) => [...arr, s]), [commit]);
-
-  // Bulk append / delete — one history entry covers the whole batch.
-  const commitMany = useCallback((added) => commit((arr) => [...arr, ...added]), [commit]);
-  const deleteMany = useCallback(
-    (ids) => {
-      const idSet = new Set(ids);
-      commit((arr) => arr.filter((s) => !idSet.has(s.id)));
-    },
-    [commit]
-  );
-
-  // Property edits skip history (see comment above).
-  const updateShape = useCallback(
-    (id, patch) => setShapes((arr) => arr.map((s) => (s.id === id ? { ...s, ...patch } : s))),
-    []
-  );
-
-  const deleteShape = useCallback((id) => commit((arr) => arr.filter((s) => s.id !== id)), [commit]);
-
-  // Move a shape to an explicit index — used by sidebar drag-and-drop.
-  // `toIndex` is the desired final position in the shapes array (0 = back).
-  const moveShape = useCallback(
-    (id, toIndex) =>
-      commit((arr) => {
-        const from = arr.findIndex((s) => s.id === id);
-        if (from < 0) return arr;
-        const next = [...arr];
-        const [item] = next.splice(from, 1);
-        const insertAt = Math.max(0, Math.min(next.length, toIndex));
-        if (insertAt === from) return arr;
-        next.splice(insertAt, 0, item);
-        return next;
-      }),
-    [commit]
-  );
-
-  // Z-order. Array index = render order (later = on top). `action` is one of
-  // 'front', 'back', 'forward', 'backward'.
-  const reorderShape = useCallback(
-    (id, action) =>
-      commit((arr) => {
-        const idx = arr.findIndex((s) => s.id === id);
-        if (idx < 0) return arr;
-        const s = arr[idx];
-        const rest = [...arr.slice(0, idx), ...arr.slice(idx + 1)];
-        if (action === 'front') return [...rest, s];
-        if (action === 'back') return [s, ...rest];
-        if (action === 'forward') {
-          if (idx >= arr.length - 1) return arr;
-          rest.splice(idx + 1, 0, s);
-          return rest;
-        }
-        if (action === 'backward') {
-          if (idx <= 0) return arr;
-          rest.splice(idx - 1, 0, s);
-          return rest;
-        }
-        return arr;
-      }),
-    [commit]
-  );
-
-  const setShapesLive = useCallback((updater) => setShapes(updater), []);
-
-  const clear = useCallback(() => {
-    setImage(null);
-    setShapes([]);
-    setPast([]);
-  }, []);
-
   // For SVG import — drop in an image without going through FileReader.
   const setImageRaw = useCallback((img) => setImage(img), []);
 
-  // For SVG import — replace the entire shapes array as a single undo entry.
-  const replaceShapes = useCallback((next) => commit(next), [commit]);
+  const clear = useCallback(() => {
+    setImage(null);
+    hotspots.reset();
+    pieces.reset();
+  }, [hotspots, pieces]);
+
+  // Remove just the background image (shapes/pieces are kept, so a replacement
+  // image drops them right back into place).
+  const deleteImage = useCallback(() => setImage(null), []);
+
+  // Replace the whole project at once (used when pulling from the cloud).
+  // Seeds both collections without an undo entry — a fresh load, not an edit.
+  const loadSnapshot = useCallback((snap) => {
+    setImage(snap?.image ?? null);
+    hotspots.setAll(snap?.shapes ?? []);
+    pieces.setAll(snap?.pieces ?? []);
+  }, [hotspots, pieces]);
 
   return {
     image,
-    shapes,
     uploadImage,
     setImageRaw,
-    replaceShapes,
-    addShape,
-    commitMany,
-    deleteMany,
-    updateShape,
-    deleteShape,
-    reorderShape,
-    moveShape,
-    setShapesLive,
-    pushHistory,
-    undo,
-    canUndo: past.length > 0,
     clear,
+    deleteImage,
+    loadSnapshot,
+
+    // Back-compat flat hotspot API (used throughout App / Sidebar).
+    shapes: hotspots.shapes,
+    addShape: hotspots.addShape,
+    commitMany: hotspots.commitMany,
+    deleteMany: hotspots.deleteMany,
+    updateShape: hotspots.updateShape,
+    deleteShape: hotspots.deleteShape,
+    reorderShape: hotspots.reorderShape,
+    moveShape: hotspots.moveShape,
+    setShapesLive: hotspots.setShapesLive,
+    pushHistory: hotspots.pushHistory,
+    undo: hotspots.undo,
+    canUndo: hotspots.canUndo,
+    replaceShapes: hotspots.replaceShapes,
+
+    // Full collection objects, for workspace-aware wiring.
+    hotspots,
+    pieces,
   };
 }

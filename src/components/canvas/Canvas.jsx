@@ -5,6 +5,7 @@ import SelectionHandles from './SelectionHandles.jsx';
 import Guides from './Guides.jsx';
 import ZoomControls from './ZoomControls.jsx';
 import Marquee from './Marquee.jsx';
+import { bbox } from '../../lib/snap.js';
 
 // Single SVG fills the viewport. Image + shapes live inside a <g> with a
 // translate+scale transform driven by the viewport hook. That means:
@@ -18,7 +19,7 @@ export default function Canvas({
   image, shapes, draft, cursor, guides, marquee, tool, mode,
   selectedIds, hoveredId, setHoveredId, svgRef, gRef,
   onMouseDown, onMouseMove, onMouseUp, onMouseLeave, onDoubleClick, onContextMenu,
-  viewport, glow = 0.4,
+  viewport, glow = 0.4, showNames = false, imageSelected = false,
 }) {
   const {
     viewportRef, viewportSize, baseX, baseY, pan, displayScale,
@@ -89,6 +90,23 @@ export default function Canvas({
             preserveAspectRatio="none"
             style={{ pointerEvents: 'none' }}
           />
+          {imageSelected && (
+            <g pointerEvents="none">
+              <rect
+                x={0} y={0} width={image.width} height={image.height}
+                fill="rgba(168,85,247,0.08)"
+                stroke="#a855f7" strokeWidth={2 / displayScale}
+              />
+              {[[0, 0], [image.width, 0], [0, image.height], [image.width, image.height]].map(([x, y], i) => (
+                <rect
+                  key={i}
+                  x={x - 5 / displayScale} y={y - 5 / displayScale}
+                  width={10 / displayScale} height={10 / displayScale}
+                  fill="#a855f7"
+                />
+              ))}
+            </g>
+          )}
           {visibleShapes.map((s) => (
             <ShapeRender
               key={s.id}
@@ -101,6 +119,26 @@ export default function Canvas({
               glow={glow}
             />
           ))}
+          {showNames && visibleShapes.map((s) => {
+            const b = bbox(s);
+            return (
+              <text
+                key={'lbl-' + s.id}
+                x={b.x + 5 / displayScale}
+                y={b.y + 16 / displayScale}
+                fontSize={13 / displayScale}
+                fontFamily="ui-monospace, 'JetBrains Mono', monospace"
+                fontWeight="600"
+                fill="#fff"
+                stroke="#04210f"
+                strokeWidth={3.5 / displayScale}
+                paintOrder="stroke"
+                style={{ pointerEvents: 'none' }}
+              >
+                {s.name}
+              </text>
+            );
+          })}
           {mode === 'edit' && selectedIds.length > 0 && (
             <SelectionHandles
               shapes={shapes}

@@ -14,7 +14,20 @@ export function makeBaseShape(count, overrides = {}) {
     opacity: 0.7,
     // Seconds for the CSS transition on the hover effect.
     transition: 0.2,
+    // Optional: makes the hotspot a clickable link, and a hover tooltip.
+    link: '',
+    label: '',
     ...overrides,
+  };
+}
+
+// Base props for a cut piece. Unlike a hotspot, a piece carries no hover/fill
+// styling — it's just a named region to crop. `role: 'cut'` tags it so the
+// renderer can color it distinctly and so it never leaks into the SVG export.
+export function makeCutPiece(count, prefix = 'piece') {
+  return {
+    role: 'cut',
+    name: `${prefix}-${count + 1}`,
   };
 }
 

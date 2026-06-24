@@ -24,7 +24,19 @@ const bboxIntersects = (a, b) =>
 // Resize and vertex-drag only run when exactly one shape is selected.
 //
 // Coords / pan / snap notes — see prior commits.
-export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory, viewport }) {
+export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory, viewport, makeBase = makeBaseShape, onBackgroundSelect }) {
+  // Notify the app when the background image is clicked (select it) or when any
+  // other interaction deselects it. Held in a ref so handlers don't need it in
+  // their dep arrays.
+  const bgSelectRef = useRef(onBackgroundSelect);
+  bgSelectRef.current = onBackgroundSelect;
+  const setBg = (v) => bgSelectRef.current?.(v);
+  // Held in a ref so the build callbacks below don't need it in their deps —
+  // lets the caller pass a fresh closure (e.g. capturing the piece-name
+  // prefix) every render without churning memoized handlers.
+  const makeBaseRef = useRef(makeBase);
+  makeBaseRef.current = makeBase;
+
   const [tool, setTool] = useState('select');
   const [mode, setMode] = useState('edit');
   const [selectedIds, setSelectedIdsState] = useState([]);
@@ -83,7 +95,7 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
       const min = d.type === 'polygon' ? 3 : 2;
       if (d.points.length < min) return null;
       const overrides = d.type === 'polyline' ? { hover: 'fill' } : {};
-      const built = buildShapeFromDraft(d, makeBaseShape(shapes.length, overrides));
+      const built = buildShapeFromDraft(d, makeBaseRef.current(shapes.length, overrides));
       if (built) {
         addShape(built);
         selectOne(built.id);
@@ -177,6 +189,7 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
     if (tool === 'select') {
       if (!isInsideImage(pos)) {
         clearSelection();
+        setBg(false);
         return;
       }
       setMarquee({ x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y, additive: e.shiftKey });
@@ -193,6 +206,7 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
       const candidates = buildCandidates(shapes, image.width, image.height);
       const snapped = snapPoint({ x: pos.x, y: pos.y, candidates, threshold });
       clearSelection();
+      setBg(false);
       setDraft({ type: tool, start: snapped, current: snapped });
       return;
     }
@@ -201,6 +215,7 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
         const candidates = buildCandidates(shapes, image.width, image.height);
         const snapped = snapPoint({ x: pos.x, y: pos.y, candidates, threshold });
         clearSelection();
+        setBg(false);
         setDraft({ type: tool, points: [[snapped.x, snapped.y]] });
         return;
       }
@@ -316,15 +331,18 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
     if (interaction?.type === 'marquee') {
       const m = marquee;
       if (m) {
-        const box = {
-          x: Math.min(m.x0, m.x1), y: Math.min(m.y0, m.y1),
-          w: Math.abs(m.x1 - m.x0), h: Math.abs(m.y1 - m.y0),
-        };
-        const hits = shapes.filter((s) => !s.hidden && !s.locked && bboxIntersects(box, bbox(s))).map((s) => s.id);
-        if (m.additive) {
-          setSelectedIdsState((prev) => Array.from(new Set([...prev, ...hits])));
+        const w = Math.abs(m.x1 - m.x0), h = Math.abs(m.y1 - m.y0);
+        if (w < 2 && h < 2 && !m.additive) {
+          // A plain click on empty image area (no drag) → select the image.
+          setBg(true);
         } else {
-          setSelectedIdsState(hits);
+          const box = { x: Math.min(m.x0, m.x1), y: Math.min(m.y0, m.y1), w, h };
+          const hits = shapes.filter((s) => !s.hidden && !s.locked && bboxIntersects(box, bbox(s))).map((s) => s.id);
+          if (m.additive) {
+            setSelectedIdsState((prev) => Array.from(new Set([...prev, ...hits])));
+          } else {
+            setSelectedIdsState(hits);
+          }
         }
       }
       setMarquee(null);
@@ -345,7 +363,7 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
       const w = Math.abs(current.x - start.x);
       const h = Math.abs(current.y - start.y);
       if (w > MIN_SHAPE_SIZE && h > MIN_SHAPE_SIZE) {
-        const built = buildShapeFromDraft(draft, makeBaseShape(shapes.length));
+        const built = buildShapeFromDraft(draft, makeBaseRef.current(shapes.length));
         if (built) {
           addShape(built);
           selectOne(built.id);

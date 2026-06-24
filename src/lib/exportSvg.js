@@ -7,6 +7,17 @@ const r2 = (n) => Math.round(n * 100) / 100;
 
 const escapeClass = (s) => s.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
 
+// Escape text/attribute values destined for markup (labels, hrefs).
+const escapeXml = (s) =>
+  String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+
+const titleTag = (shape) => (shape.label ? `<title>${escapeXml(shape.label)}</title>` : '');
+
 function polygonPointsAttr(points) {
   return points.map(([x, y]) => `${r2(x)} ${r2(y)}`).join(' ');
 }
@@ -36,17 +47,21 @@ function ellipseAsPathSubpath(cx, cy, rx, ry) {
 
 function shapeElement(shape) {
   const cls = escapeClass(shape.className);
+  const t = titleTag(shape);
+  // With a title we need an open/close element so <title> can be a child;
+  // without one we keep the compact self-closing form.
+  const el = (tag, attrs) => (t ? `<${tag} ${attrs}>${t}</${tag}>` : `<${tag} ${attrs}/>`);
   switch (shape.type) {
     case 'polygon':
-      return `<polygon class="${cls}" points="${polygonPointsAttr(shape.points)}"/>`;
+      return el('polygon', `class="${cls}" points="${polygonPointsAttr(shape.points)}"`);
     case 'rect':
-      return `<rect class="${cls}" x="${r2(shape.x)}" y="${r2(shape.y)}" width="${r2(shape.width)}" height="${r2(shape.height)}"/>`;
+      return el('rect', `class="${cls}" x="${r2(shape.x)}" y="${r2(shape.y)}" width="${r2(shape.width)}" height="${r2(shape.height)}"`);
     case 'polyline':
-      return `<polyline class="${cls}" points="${polygonPointsAttr(shape.points)}" fill="none" stroke="currentColor" stroke-width="2"/>`;
+      return el('polyline', `class="${cls}" points="${polygonPointsAttr(shape.points)}" fill="none" stroke="currentColor" stroke-width="2"`);
     case 'ellipse':
-      return `<ellipse class="${cls}" cx="${r2(shape.cx)}" cy="${r2(shape.cy)}" rx="${r2(shape.rx)}" ry="${r2(shape.ry)}"/>`;
+      return el('ellipse', `class="${cls}" cx="${r2(shape.cx)}" cy="${r2(shape.cy)}" rx="${r2(shape.rx)}" ry="${r2(shape.ry)}"`);
     case 'circle':
-      return `<circle class="${cls}" cx="${r2(shape.cx)}" cy="${r2(shape.cy)}" r="${r2(shape.r)}"/>`;
+      return el('circle', `class="${cls}" cx="${r2(shape.cx)}" cy="${r2(shape.cy)}" r="${r2(shape.r)}"`);
     default:
       return '';
   }
@@ -158,10 +173,14 @@ export function exportSvg({ width, height, shapes, glow = 0 }) {
   const body = shapes
     .map((s) => {
       const main = shapeElement(s);
-      if (s.hover === 'spotlight' && s.type !== 'polyline') {
-        return main + '\n  ' + bgPathFor(s, W, H);
+      let el = (s.hover === 'spotlight' && s.type !== 'polyline')
+        ? main + '\n  ' + bgPathFor(s, W, H)
+        : main;
+      // A link turns the hotspot into a navigable <a>. Opens in a new tab.
+      if (s.link) {
+        el = `<a href="${escapeXml(s.link)}" target="_blank" rel="noopener noreferrer">${el}</a>`;
       }
-      return main;
+      return el;
     })
     .join('\n  ');
 

@@ -17,16 +17,24 @@ import SpotlightMask from './SpotlightMask.jsx';
 // Stroke widths and animation values divide by displayScale so on-screen
 // thickness is constant regardless of zoom.
 export default function ShapeRender({ shape, isSelected, isHovered, mode, onHover, displayScale = 1, glow = 0 }) {
-  const editFill = shape.hover === 'fill'
-    ? (shape.fill || '#c4c4c4')
-    : (isHovered ? 'rgba(168, 85, 247, 0.18)' : 'rgba(99, 102, 241, 0.12)');
+  // Cut pieces are drawn in emerald so they read as "crop regions" rather than
+  // interactive hotspots (which stay violet).
+  const isCut = shape.role === 'cut';
+
+  const editFill = isCut
+    ? (isHovered ? 'rgba(16, 185, 129, 0.22)' : 'rgba(16, 185, 129, 0.14)')
+    : shape.hover === 'fill'
+      ? (shape.fill || '#c4c4c4')
+      : (isHovered ? 'rgba(168, 85, 247, 0.18)' : 'rgba(99, 102, 241, 0.12)');
 
   const previewFill = shape.hover === 'fill'
     ? (isHovered ? (shape.hoverFill || '#d8d8d8') : (shape.fill || '#c4c4c4'))
     : 'transparent';
 
   const fill = mode === 'edit' ? editFill : previewFill;
-  const editStroke = isSelected ? '#a855f7' : isHovered ? '#c084fc' : '#6366f1';
+  const editStroke = isCut
+    ? (isSelected ? '#34d399' : isHovered ? '#6ee7b7' : '#10b981')
+    : (isSelected ? '#a855f7' : isHovered ? '#c084fc' : '#6366f1');
   const baseSW = isSelected ? 3 : 2;
 
   // Preview-mode hover effect — mirrors the exported CSS. A thin static
@@ -62,6 +70,7 @@ export default function ShapeRender({ shape, isSelected, isHovered, mode, onHove
 
   return (
     <g>
+      {shape.label ? <title>{shape.label}</title> : null}
       {showSpotlight && <SpotlightMask shape={shape} />}
       {shape.type === 'rect' && (
         <rect {...common} x={shape.x} y={shape.y} width={shape.width} height={shape.height} />

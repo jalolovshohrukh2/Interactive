@@ -3,17 +3,26 @@ import { useProject } from './hooks/useProject.js';
 import { useDrawing } from './hooks/useDrawing.js';
 import { useKeyboard } from './hooks/useKeyboard.js';
 import { useViewport } from './hooks/useViewport.js';
+import { useCloudSync } from './hooks/useCloudSync.js';
 import { exportSvg } from './lib/exportSvg.js';
 import { importSvg } from './lib/importSvg.js';
-import { cloneShape } from './lib/shapes.js';
+import { cloneShape, makeCutPiece, newId } from './lib/shapes.js';
+import { downloadPiecesAsFiles, downloadPiecesAsZip } from './lib/cropPieces.js';
+import * as cloud from './lib/cloud.js';
+import {
+  TOOLS, CUT_TOOLS, TOOL_SHORTCUTS, CUT_TOOL_SHORTCUTS, DEFAULT_PIECE_PREFIX,
+} from './constants.js';
 
+import { Trash2 } from 'lucide-react';
 import Header from './components/Header.jsx';
 import Toolbar from './components/Toolbar.jsx';
 import StatusBar from './components/StatusBar.jsx';
 import ShortcutsOverlay from './components/ShortcutsOverlay.jsx';
+import CloudPanel from './components/CloudPanel.jsx';
 import Canvas from './components/canvas/Canvas.jsx';
 import EmptyCanvas from './components/canvas/EmptyCanvas.jsx';
 import Sidebar from './components/sidebar/Sidebar.jsx';
+import CutSidebar from './components/sidebar/CutSidebar.jsx';
 
 // Tiny placeholder for SVG import when the user has no background image yet.
 const blankImage = (w, h) => {
@@ -21,56 +30,138 @@ const blankImage = (w, h) => {
   return { url: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg), width: w, height: h };
 };
 
+const readLS = (key, fallback) => {
+  try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+};
+
 export default function App() {
   const project = useProject();
   const viewport = useViewport({ image: project.image });
-  const drawing = useDrawing({
+
+  // Whether the background image itself is selected (click it with the Select
+  // tool). When selected it can be deleted via Delete or the floating button.
+  const [imageSelected, setImageSelected] = useState(false);
+  const selectBackground = useCallback((v) => setImageSelected(v), []);
+
+  // Top-level workspace: 'hotspots' (the interactive-SVG editor) or 'cut'
+  // (slice the image into image pieces). Each has its own toolset, sidebar,
+  // and shape collection so the two never mix.
+  const [workspace, setWorkspaceState] = useState(() => {
+    const v = readLS('interactive-image:workspace', 'hotspots');
+    return v === 'cut' ? 'cut' : 'hotspots';
+  });
+  const setWorkspace = useCallback((w) => {
+    setWorkspaceState(w);
+    try { localStorage.setItem('interactive-image:workspace', w); } catch {}
+  }, []);
+
+  // Cut-workspace settings.
+  const [piecePrefix, setPiecePrefixState] = useState(() => readLS('interactive-image:piecePrefix', DEFAULT_PIECE_PREFIX));
+  const setPiecePrefix = useCallback((v) => {
+    setPiecePrefixState(v);
+    try { localStorage.setItem('interactive-image:piecePrefix', v); } catch {}
+  }, []);
+  const [pieceMask, setPieceMaskState] = useState(() => readLS('interactive-image:pieceMask', 'true') !== 'false');
+  const setPieceMask = useCallback((v) => {
+    setPieceMaskState(v);
+    try { localStorage.setItem('interactive-image:pieceMask', v ? 'true' : 'false'); } catch {}
+  }, []);
+  const [piecePadding, setPiecePaddingState] = useState(() => Number(readLS('interactive-image:piecePadding', '0')) || 0);
+  const setPiecePadding = useCallback((v) => {
+    const n = Math.max(0, Math.min(500, Number(v) || 0));
+    setPiecePaddingState(n);
+    try { localStorage.setItem('interactive-image:piecePadding', String(n)); } catch {}
+  }, []);
+  const [pieceScale, setPieceScaleState] = useState(() => Number(readLS('interactive-image:pieceScale', '1')) || 1);
+  const setPieceScale = useCallback((v) => {
+    setPieceScaleState(v);
+    try { localStorage.setItem('interactive-image:pieceScale', String(v)); } catch {}
+  }, []);
+  const [pieceFormat, setPieceFormatState] = useState(() => (readLS('interactive-image:pieceFormat', 'png') === 'jpeg' ? 'jpeg' : 'png'));
+  const setPieceFormat = useCallback((v) => {
+    setPieceFormatState(v);
+    try { localStorage.setItem('interactive-image:pieceFormat', v); } catch {}
+  }, []);
+
+  // One drawing engine per workspace, each bound to its own collection.
+  const hotspotDrawing = useDrawing({
     image: project.image,
     shapes: project.shapes,
     addShape: project.addShape,
     setShapesLive: project.setShapesLive,
     pushHistory: project.pushHistory,
     viewport,
+    onBackgroundSelect: selectBackground,
+  });
+  const cutDrawing = useDrawing({
+    image: project.image,
+    shapes: project.pieces.shapes,
+    addShape: project.pieces.addShape,
+    setShapesLive: project.pieces.setShapesLive,
+    pushHistory: project.pieces.pushHistory,
+    viewport,
+    makeBase: (count) => makeCutPiece(count, (piecePrefix || DEFAULT_PIECE_PREFIX).trim() || DEFAULT_PIECE_PREFIX),
+    onBackgroundSelect: selectBackground,
   });
 
-  // Clipboard: array of shape snapshots. Empty array means nothing to paste.
-  const clipboardRef = useRef([]);
+  const isCut = workspace === 'cut';
+  const drawing = isCut ? cutDrawing : hotspotDrawing;
+  const activeColl = isCut ? project.pieces : project.hotspots;
+  const activeShapes = activeColl.shapes;
 
-  const selectedSet = () => new Set(drawing.selectedIds);
+  // Clipboard: tagged with the workspace it was copied from so a hotspot
+  // never pastes into the Cut workspace (or vice-versa).
+  const clipboardRef = useRef({ workspace: null, shapes: [] });
 
   const handleCopy = useCallback(() => {
     const ids = new Set(drawing.selectedIds);
     if (ids.size === 0) return;
-    clipboardRef.current = project.shapes.filter((s) => ids.has(s.id));
-  }, [project.shapes, drawing.selectedIds]);
+    clipboardRef.current = {
+      workspace,
+      shapes: activeShapes.filter((s) => ids.has(s.id)),
+    };
+  }, [activeShapes, drawing.selectedIds, workspace]);
 
   const handlePaste = useCallback(() => {
-    const src = clipboardRef.current;
-    if (!src.length) return;
-    const copies = src.map((s) => cloneShape(s));
-    project.commitMany(copies);
+    const clip = clipboardRef.current;
+    if (clip.workspace !== workspace || !clip.shapes.length) return;
+    const copies = clip.shapes.map((s) => cloneShape(s));
+    activeColl.commitMany(copies);
     drawing.setSelectedIds(copies.map((c) => c.id));
-  }, [project, drawing]);
+  }, [activeColl, drawing, workspace]);
 
   const handleDuplicate = useCallback(() => {
     const ids = new Set(drawing.selectedIds);
     if (ids.size === 0) return;
-    const src = project.shapes.filter((s) => ids.has(s.id));
-    const copies = src.map((s) => cloneShape(s));
-    project.commitMany(copies);
+    const copies = activeShapes.filter((s) => ids.has(s.id)).map((s) => cloneShape(s));
+    if (!copies.length) return;
+    activeColl.commitMany(copies);
     drawing.setSelectedIds(copies.map((c) => c.id));
-  }, [project, drawing]);
+  }, [activeColl, activeShapes, drawing]);
+
+  const handleDeleteImage = useCallback(() => {
+    project.deleteImage();
+    setImageSelected(false);
+    hotspotDrawing.clearSelection();
+    cutDrawing.clearSelection();
+  }, [project, hotspotDrawing, cutDrawing]);
 
   const handleDeleteSelected = useCallback(() => {
+    if (imageSelected) { handleDeleteImage(); return; }
     const ids = drawing.selectedIds;
     if (!ids.length) return;
-    project.deleteMany(ids);
+    activeColl.deleteMany(ids);
     drawing.clearSelection();
-  }, [project, drawing]);
+  }, [imageSelected, handleDeleteImage, activeColl, drawing]);
+
+  // Selecting any shape deselects the background image.
+  useEffect(() => {
+    if (drawing.selectedIds.length > 0) setImageSelected(false);
+  }, [drawing.selectedIds]);
 
   const handleUndo = useCallback(() => {
-    if (!drawing.popDraftPoint()) project.undo();
-  }, [drawing, project]);
+    if (!drawing.popDraftPoint()) activeColl.undo();
+  }, [drawing, activeColl]);
 
   // Single-row click in the sidebar: replace selection.
   // Shift+click in the sidebar: toggle the row in/out of the selection.
@@ -82,11 +173,66 @@ export default function App() {
     [drawing]
   );
 
+  // ---- Cloud sync (single active project) ----
+  const [cloudOpen, setCloudOpen] = useState(false);
+  const [cloudEnabled, setCloudEnabled] = useState(() => cloud.isEnabled());
+  const [projectId, setProjectId] = useState(() => {
+    try {
+      let v = localStorage.getItem('interactive-image:projectId');
+      if (!v) { v = newId(); localStorage.setItem('interactive-image:projectId', v); }
+      return v;
+    } catch { return newId(); }
+  });
+  const [projectName, setProjectNameState] = useState(() => {
+    try { return localStorage.getItem('interactive-image:projectName') || 'Untitled'; } catch { return 'Untitled'; }
+  });
+  const setProjectName = useCallback((n) => {
+    setProjectNameState(n);
+    try { localStorage.setItem('interactive-image:projectName', n); } catch {}
+  }, []);
+  const persistProjectId = useCallback((id) => {
+    setProjectId(id);
+    try { localStorage.setItem('interactive-image:projectId', id); } catch {}
+  }, []);
+
+  // Stable snapshot for the sync hook — depends on the inner fields, not the
+  // per-render project wrapper, so the auto-sync effect only fires on real edits.
+  const cloudProject = useMemo(
+    () => ({ id: projectId, name: projectName, image: project.image, shapes: project.shapes, pieces: project.pieces }),
+    [projectId, projectName, project.image, project.shapes, project.pieces]
+  );
+
+  const applyRemote = useCallback((remote) => {
+    persistProjectId(remote.id);
+    setProjectName(remote.name || 'Untitled');
+    project.loadSnapshot({ image: remote.image, shapes: remote.shapes, pieces: remote.pieces });
+    hotspotDrawing.clearSelection(); hotspotDrawing.cancelDraft();
+    cutDrawing.clearSelection(); cutDrawing.cancelDraft();
+  }, [persistProjectId, setProjectName, project, hotspotDrawing, cutDrawing]);
+
+  const sync = useCloudSync({ enabled: cloudEnabled, project: cloudProject, onApplyRemote: applyRemote });
+
+  const handleConnect = useCallback(async (token) => {
+    const r = await sync.connect(token);
+    if (r.ok) setCloudEnabled(true);
+    return r;
+  }, [sync]);
+  const handleDisconnect = useCallback(() => { sync.disconnect(); setCloudEnabled(false); }, [sync]);
+  const handleNewProject = useCallback(() => {
+    if (!confirm('Start a new empty project? Your current one stays saved in the cloud.')) return;
+    persistProjectId(newId());
+    setProjectName('Untitled');
+    project.clear();
+    hotspotDrawing.clearSelection(); hotspotDrawing.cancelDraft();
+    cutDrawing.clearSelection(); cutDrawing.cancelDraft();
+    setCloudOpen(false);
+  }, [persistProjectId, setProjectName, project, hotspotDrawing, cutDrawing]);
+
   useKeyboard({
     draft: drawing.draft,
-    hasSelection: drawing.selectedIds.length > 0,
+    hasSelection: drawing.selectedIds.length > 0 || imageSelected,
     deleteSelected: handleDeleteSelected,
-    cancelDraft: () => { drawing.cancelDraft(); drawing.clearSelection(); },
+    cancelDraft: () => { drawing.cancelDraft(); drawing.clearSelection(); setImageSelected(false); },
     switchTool: drawing.switchTool,
     finishPolyDraft: drawing.finishPolyDraft,
     onUndo: handleUndo,
@@ -97,6 +243,7 @@ export default function App() {
     onZoomOut: viewport.zoomOut,
     onResetZoom: viewport.resetView,
     onShowShortcuts: () => setShortcutsOpen(true),
+    toolShortcuts: isCut ? CUT_TOOL_SHORTCUTS : TOOL_SHORTCUTS,
   });
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -130,7 +277,7 @@ export default function App() {
     e.target.value = '';
   };
 
-  // Shared by file-upload import AND clipboard-paste import.
+  // Shared by file-upload import AND clipboard-paste import. Hotspot-only.
   // Shows a confirm() dialog when there's already work on the canvas, so the
   // user doesn't accidentally wipe it out from a stray paste.
   const importSvgText = useCallback((text) => {
@@ -146,11 +293,11 @@ export default function App() {
         project.setImageRaw(blankImage(parsed.width, parsed.height));
       }
       project.replaceShapes(parsed.shapes);
-      drawing.clearSelection();
+      hotspotDrawing.clearSelection();
     } catch (err) {
       alert('Could not parse SVG: ' + err.message);
     }
-  }, [project, drawing]);
+  }, [project, hotspotDrawing]);
 
   // Silent apply — used by the Code-panel textarea where the user is
   // actively editing markup. No confirm; if a typo blows away shapes the
@@ -162,8 +309,8 @@ export default function App() {
       project.setImageRaw(blankImage(parsed.width, parsed.height));
     }
     project.replaceShapes(parsed.shapes);
-    drawing.clearSelection();
-  }, [project, drawing]);
+    hotspotDrawing.clearSelection();
+  }, [project, hotspotDrawing]);
 
   const handleImportSvg = async (e) => {
     const file = e.target.files?.[0];
@@ -174,8 +321,8 @@ export default function App() {
   };
 
   // Listen for clipboard paste anywhere in the app. Two cases:
-  //   1. Pasted text looks like SVG → import it as a new project.
-  //   2. Internal clipboard has shapes → paste-as-duplicate (existing behavior).
+  //   1. Pasted text looks like SVG → import it as a new project (Hotspots only).
+  //   2. Internal clipboard has shapes → paste-as-duplicate in the active workspace.
   // We listen on document so it works regardless of focus, but skip when the
   // user is typing into a form field (they want the input to handle paste).
   useEffect(() => {
@@ -183,23 +330,45 @@ export default function App() {
     const onPaste = (e) => {
       const tag = e.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      // 1. An image on the clipboard (screenshot, copied picture) → load it as
+      //    the background. Highest priority.
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (const it of items) {
+          if (it.kind === 'file' && it.type.startsWith('image/')) {
+            const file = it.getAsFile();
+            if (file) {
+              e.preventDefault();
+              project.uploadImage(file);
+              setImageSelected(false);
+              return;
+            }
+          }
+        }
+      }
+
+      // 2. SVG markup as text → import as a project (Hotspots only).
       const text = e.clipboardData?.getData('text/plain') || '';
-      if (text && looksLikeSvg(text)) {
+      if (!isCut && text && looksLikeSvg(text)) {
         e.preventDefault();
         importSvgText(text);
         return;
       }
-      if (clipboardRef.current.length > 0) {
+
+      // 3. Internal shape clipboard → paste-as-duplicate.
+      if (clipboardRef.current.shapes.length > 0) {
         e.preventDefault();
         handlePaste();
       }
     };
     document.addEventListener('paste', onPaste);
     return () => document.removeEventListener('paste', onPaste);
-  }, [importSvgText, handlePaste]);
+  }, [importSvgText, handlePaste, isCut, project.uploadImage]);
 
   // Live SVG export — regenerates whenever shapes / image / glow change.
-  // The Code tab in the sidebar mirrors this string in real time.
+  // The Code tab in the sidebar mirrors this string in real time. Always the
+  // hotspot collection; cut pieces never enter the SVG.
   const exportText = useMemo(() => {
     if (!project.image) return '';
     return exportSvg({
@@ -213,15 +382,114 @@ export default function App() {
   // The "Export SVG" header button just switches the sidebar to the Code tab.
   const handleExport = () => setSidebarTab('code');
 
+  // ---- Reusable layouts (hotspots + pieces, without the image) ----
+  const handleSaveLayout = useCallback(() => {
+    const data = {
+      version: 2,
+      name: projectName,
+      shapes: project.shapes,
+      pieces: project.pieces.shapes,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (projectName || 'layout').replace(/[^\w-]+/g, '_') + '.layout.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }, [project.shapes, project.pieces.shapes, projectName]);
+
+  const handleLoadLayout = useCallback(async (file) => {
+    try {
+      const data = JSON.parse(await file.text());
+      const shapes = Array.isArray(data.shapes) ? data.shapes : [];
+      const pieces = Array.isArray(data.pieces) ? data.pieces : [];
+      if (!shapes.length && !pieces.length) { alert('That file has no layout in it.'); return; }
+      const have = project.shapes.length + project.pieces.shapes.length;
+      if (have > 0 && !confirm(
+        `Replace your current ${project.shapes.length} hotspot(s) and ${project.pieces.shapes.length} piece(s) with this layout?`
+      )) return;
+      // Fresh ids so the loaded layout never collides with anything.
+      project.hotspots.replaceShapes(shapes.map((s) => ({ ...s, id: newId() })));
+      project.pieces.replaceShapes(pieces.map((s) => ({ ...s, id: newId() })));
+      hotspotDrawing.clearSelection();
+      cutDrawing.clearSelection();
+    } catch (err) {
+      alert('Could not read layout file: ' + err.message);
+    }
+  }, [project, hotspotDrawing, cutDrawing]);
+
   const handleClear = () => {
     if (!confirm('Clear image and all shapes? This cannot be undone.')) return;
     project.clear();
-    drawing.clearSelection();
-    drawing.cancelDraft();
+    hotspotDrawing.clearSelection();
+    hotspotDrawing.cancelDraft();
+    cutDrawing.clearSelection();
+    cutDrawing.cancelDraft();
   };
+
+  // ---- Cut workspace handlers ----
+  const handlePieceDelete = useCallback((id) => {
+    project.pieces.deleteShape(id);
+    cutDrawing.setSelectedIds(cutDrawing.selectedIds.filter((x) => x !== id));
+  }, [project.pieces, cutDrawing]);
+
+  const handlePieceSelectAll = useCallback(() => {
+    cutDrawing.setSelectedIds(project.pieces.shapes.map((p) => p.id));
+  }, [cutDrawing, project.pieces.shapes]);
+
+  const handleClearPieces = useCallback(() => {
+    if (!project.pieces.shapes.length) return;
+    if (!confirm('Remove all pieces?')) return;
+    project.pieces.replaceShapes([]);
+    cutDrawing.clearSelection();
+    cutDrawing.cancelDraft();
+  }, [project.pieces, cutDrawing]);
+
+  const handleExportPieces = useCallback(async (list, delivery) => {
+    if (!project.image || !list.length) return;
+    const { url, width, height } = project.image;
+    const opts = { mask: pieceMask, padding: piecePadding, scale: pieceScale, format: pieceFormat };
+    try {
+      if (delivery === 'zip') {
+        await downloadPiecesAsZip(url, list, width, height, { ...opts, zipName: 'pieces.zip' });
+      } else {
+        await downloadPiecesAsFiles(url, list, width, height, opts);
+      }
+    } catch (err) {
+      alert('Could not export pieces: ' + err.message);
+    }
+  }, [project.image, pieceMask, piecePadding, pieceScale, pieceFormat]);
+
+  // Auto-cut the whole image into a cols × rows grid of rectangular pieces.
+  const handleGridSlice = useCallback((cols, rows) => {
+    if (!project.image) return;
+    const c = Math.max(1, Math.min(50, Math.round(cols)));
+    const r = Math.max(1, Math.min(50, Math.round(rows)));
+    if (project.pieces.shapes.length && !confirm(
+      `Replace the current ${project.pieces.shapes.length} piece(s) with a ${c}×${r} grid?`
+    )) return;
+    const { width, height } = project.image;
+    const prefix = (piecePrefix || DEFAULT_PIECE_PREFIX).trim() || DEFAULT_PIECE_PREFIX;
+    const tiles = [];
+    for (let ry = 0; ry < r; ry++) {
+      for (let cx = 0; cx < c; cx++) {
+        tiles.push({
+          id: newId(), type: 'rect', role: 'cut',
+          name: `${prefix}-r${ry + 1}c${cx + 1}`,
+          x: (cx / c) * width, y: (ry / r) * height,
+          width: width / c, height: height / r,
+        });
+      }
+    }
+    project.pieces.replaceShapes(tiles);
+    cutDrawing.clearSelection();
+  }, [project.image, project.pieces, piecePrefix, cutDrawing]);
 
   const hasImage = !!project.image;
   const canExport = hasImage && project.shapes.length > 0;
+  const canUndo = activeColl.canUndo || (drawing.draft?.points?.length > 0);
 
   return (
     <div className="h-full flex flex-col bg-[#0f0f10] text-[#e8e8e8]">
@@ -233,8 +501,12 @@ export default function App() {
         onExport={handleExport}
         canExport={canExport}
         onUndo={handleUndo}
-        canUndo={project.canUndo || (drawing.draft?.points?.length > 0)}
+        canUndo={canUndo}
         onShowShortcuts={() => setShortcutsOpen(true)}
+        workspace={workspace}
+        onWorkspace={setWorkspace}
+        onCloud={() => setCloudOpen(true)}
+        cloudStatus={sync.status}
       />
 
       <div className="flex-1 flex min-h-0">
@@ -242,6 +514,7 @@ export default function App() {
           activeTool={drawing.tool}
           onPick={drawing.switchTool}
           disabled={drawing.mode !== 'edit'}
+          tools={isCut ? CUT_TOOLS : TOOLS}
         />
 
         <main className="flex-1 min-w-0 relative overflow-hidden bg-[#0f0f10]">
@@ -250,7 +523,7 @@ export default function App() {
           ) : (
             <Canvas
               image={project.image}
-              shapes={project.shapes}
+              shapes={activeShapes}
               draft={drawing.draft}
               cursor={drawing.cursor}
               guides={drawing.guides}
@@ -270,7 +543,20 @@ export default function App() {
               onContextMenu={handleUndo}
               viewport={viewport}
               glow={glow}
+              showNames={isCut}
+              imageSelected={imageSelected}
             />
+          )}
+
+          {hasImage && imageSelected && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10">
+              <button
+                onClick={handleDeleteImage}
+                className="flex items-center gap-1.5 px-3 h-9 rounded-md bg-[#1a1a1d]/95 backdrop-blur border border-[#26262a] text-[13px] text-[#c4c4c8] shadow-xl hover:border-red-500/60 hover:text-red-400 transition-colors"
+              >
+                <Trash2 size={14} /> Delete image
+              </button>
+            </div>
           )}
 
           {hasImage && (
@@ -283,31 +569,81 @@ export default function App() {
           )}
         </main>
 
-        <Sidebar
-          shapes={project.shapes}
-          selectedIds={drawing.selectedIds}
-          onSelect={handleSidebarSelect}
-          onDelete={(id) => project.deleteShape(id)}
-          onUpdate={project.updateShape}
-          onDeleteSelected={handleDeleteSelected}
-          onDuplicateSelected={handleDuplicate}
-          onReorder={project.reorderShape}
-          onMoveShape={project.moveShape}
-          glow={glow}
-          onGlowChange={updateGlow}
-          tab={sidebarTab}
-          onTabChange={setSidebarTab}
-          exportText={exportText}
-          onApplyCode={applySvgText}
-          canExport={canExport}
-          width={sidebarWidth}
-          onWidthChange={updateSidebarWidth}
-          onClear={handleClear}
-          hasImage={hasImage}
-        />
+        {isCut ? (
+          <CutSidebar
+            width={sidebarWidth}
+            onWidthChange={updateSidebarWidth}
+            pieces={project.pieces.shapes}
+            selectedIds={drawing.selectedIds}
+            onSelect={handleSidebarSelect}
+            onUpdateName={(id, name) => project.pieces.updateShape(id, { name })}
+            onDelete={handlePieceDelete}
+            onSelectAll={handlePieceSelectAll}
+            onSelectNone={drawing.clearSelection}
+            onClearAll={handleClearPieces}
+            mask={pieceMask}
+            onMaskChange={setPieceMask}
+            padding={piecePadding}
+            onPaddingChange={setPiecePadding}
+            scale={pieceScale}
+            onScaleChange={setPieceScale}
+            format={pieceFormat}
+            onFormatChange={setPieceFormat}
+            prefix={piecePrefix}
+            onPrefixChange={setPiecePrefix}
+            onExport={handleExportPieces}
+            onGridSlice={handleGridSlice}
+            onSaveLayout={handleSaveLayout}
+            onLoadLayout={handleLoadLayout}
+            hasImage={hasImage}
+          />
+        ) : (
+          <Sidebar
+            shapes={project.shapes}
+            selectedIds={drawing.selectedIds}
+            onSelect={handleSidebarSelect}
+            onDelete={(id) => project.deleteShape(id)}
+            onUpdate={project.updateShape}
+            onDeleteSelected={handleDeleteSelected}
+            onDuplicateSelected={handleDuplicate}
+            onReorder={project.reorderShape}
+            onMoveShape={project.moveShape}
+            glow={glow}
+            onGlowChange={updateGlow}
+            tab={sidebarTab}
+            onTabChange={setSidebarTab}
+            exportText={exportText}
+            onApplyCode={applySvgText}
+            canExport={canExport}
+            width={sidebarWidth}
+            onWidthChange={updateSidebarWidth}
+            onClear={handleClear}
+            onSaveLayout={handleSaveLayout}
+            onLoadLayout={handleLoadLayout}
+            hasImage={hasImage}
+          />
+        )}
       </div>
 
       {shortcutsOpen && <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />}
+
+      {cloudOpen && (
+        <CloudPanel
+          onClose={() => setCloudOpen(false)}
+          status={sync.status}
+          enabled={cloudEnabled}
+          currentId={projectId}
+          currentName={projectName}
+          onConnect={handleConnect}
+          onDisconnect={handleDisconnect}
+          onList={sync.list}
+          onOpen={sync.open}
+          onRemove={sync.remove}
+          onSaveNow={sync.saveNow}
+          onRename={setProjectName}
+          onNewProject={handleNewProject}
+        />
+      )}
     </div>
   );
 }

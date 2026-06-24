@@ -21,6 +21,28 @@ export default function DetailPanel({ shape, onUpdate, onReorder }) {
       </div>
 
       <div>
+        <Label>Link (URL)</Label>
+        <input
+          type="url"
+          value={shape.link || ''}
+          onChange={(e) => onUpdate({ link: e.target.value })}
+          className="w-full mt-1 px-2.5 py-1.5 text-[13px] bg-[#0a0a0c] border border-[#26262a] rounded text-white outline-none focus:border-violet-500/60 transition-colors"
+          placeholder="https://…  (makes it clickable)"
+        />
+      </div>
+
+      <div>
+        <Label>Hover label</Label>
+        <input
+          type="text"
+          value={shape.label || ''}
+          onChange={(e) => onUpdate({ label: e.target.value })}
+          className="w-full mt-1 px-2.5 py-1.5 text-[13px] bg-[#0a0a0c] border border-[#26262a] rounded text-white outline-none focus:border-violet-500/60 transition-colors"
+          placeholder="e.g. Apt 12 — Available"
+        />
+      </div>
+
+      <div>
         <Label>Hover behavior</Label>
         <div className="grid grid-cols-2 gap-1.5 mt-1">
           {['spotlight', 'fill'].map((h) => {

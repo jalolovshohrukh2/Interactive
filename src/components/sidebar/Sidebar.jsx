@@ -3,11 +3,10 @@ import { Trash2, Copy, Layers, Code2 } from 'lucide-react';
 import ShapeRow from './ShapeRow.jsx';
 import DetailPanel from './DetailPanel.jsx';
 import CodePanel from './CodePanel.jsx';
+import ResizableAside from './ResizableAside.jsx';
+import LayoutControls from './LayoutControls.jsx';
 import Slider from '../ui/Slider.jsx';
 import Label from '../ui/Label.jsx';
-
-const MIN_WIDTH = 280;
-const MAX_WIDTH = 720;
 
 // Right-side panel.
 //
@@ -23,45 +22,15 @@ export default function Sidebar({
   glow, onGlowChange,
   tab, onTabChange, exportText, onApplyCode, canExport,
   width, onWidthChange,
+  onSaveLayout, onLoadLayout,
   hasImage,
 }) {
   const selectedSet = new Set(selectedIds);
   const onlyOne = selectedIds.length === 1 ? shapes.find((s) => s.id === selectedIds[0]) : null;
   const multiCount = selectedIds.length > 1 ? selectedIds.length : 0;
 
-  // Drag the left edge of the sidebar to resize. Width persists across
-  // reloads (caller wires localStorage). Clamps to [MIN_WIDTH, MAX_WIDTH].
-  const onResizeStart = (e) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = width;
-    const onMove = (ev) => {
-      // Sidebar sits on the RIGHT — dragging left widens, dragging right narrows.
-      const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startW + (startX - ev.clientX)));
-      onWidthChange(next);
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  };
-
   return (
-    <aside
-      className="border-l border-[#1f1f22] bg-[#131316] flex-shrink-0 flex flex-col overflow-hidden relative"
-      style={{ width: `${width}px` }}
-    >
-      <div
-        onMouseDown={onResizeStart}
-        title="Drag to resize"
-        className="absolute top-0 left-0 w-1.5 h-full -ml-0.5 z-20 cursor-col-resize hover:bg-violet-500/40 active:bg-violet-500/60 transition-colors"
-      />
+    <ResizableAside width={width} onWidthChange={onWidthChange}>
       <div className="px-3 pt-3 pb-2 flex-shrink-0">
         <SegmentedTabs
           tab={tab}
@@ -98,6 +67,10 @@ export default function Sidebar({
         />
       </div>
 
+      <div className="border-t border-[#1f1f22] p-3 flex-shrink-0">
+        <LayoutControls onSave={onSaveLayout} onLoad={onLoadLayout} />
+      </div>
+
       {hasImage && (
         <div className="border-t border-[#1f1f22] p-3 flex-shrink-0">
           <button
@@ -108,7 +81,7 @@ export default function Sidebar({
           </button>
         </div>
       )}
-    </aside>
+    </ResizableAside>
   );
 }
 

@@ -1,9 +1,9 @@
 import { TOOLS } from '../constants.js';
 
-export default function Toolbar({ activeTool, onPick, disabled }) {
+export default function Toolbar({ activeTool, onPick, disabled, tools = TOOLS }) {
   return (
     <nav className="w-14 flex flex-col items-center py-3 gap-1 border-r border-[#1f1f22] bg-[#131316] flex-shrink-0">
-      {TOOLS.map((t) => (
+      {tools.map((t) => (
         <ToolBtn
           key={t.id}
           active={!disabled && activeTool === t.id}
