@@ -9,6 +9,10 @@
 // branch and matches what shows up in the exported SVG.
 //
 // Sizes are divided by displayScale so they stay constant in screen pixels.
+// Above this point count a shape is treated as freehand: outline only, no
+// individual vertex dots.
+const MAX_VERTEX_HANDLES = 48;
+
 export default function SelectionHandles({ shapes, selectedIds, displayScale = 1 }) {
   const sw = 1.5 / displayScale;
   const dash = `${5 / displayScale} ${3 / displayScale}`;
@@ -53,7 +57,11 @@ export default function SelectionHandles({ shapes, selectedIds, displayScale = 1
       {shape.type === 'ellipse' && ellipseHandles(shape).map((h) => (
         <Handle key={h.handle} {...h} shapeId={shape.id} size={handleSize} sw={sw} />
       ))}
-      {isPath &&
+      {/* Per-vertex handles, but only when there's a sane number of them.
+          Freehand shapes have dozens/hundreds of points — showing a dot for
+          each would be a useless swarm, so we just show the outline and let
+          the whole shape be moved/deleted. */}
+      {isPath && shape.points.length <= MAX_VERTEX_HANDLES &&
         shape.points.map(([x, y], i) => (
           <circle
             key={i}

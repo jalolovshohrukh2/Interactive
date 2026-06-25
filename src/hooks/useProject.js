@@ -5,31 +5,36 @@ import { useShapeCollection } from './useShapeCollection.js';
 
 const IMAGE_KEY = 'image';
 
-// Owns the persisted project: the shared background image plus two independent
-// shape collections —
+// Owns the persisted project: the shared background image plus three
+// independent shape collections —
 //   - hotspots: interactive shapes exported as the SVG.
 //   - pieces:   cut regions used by the Cut workspace to slice the image.
+//   - blurs:    focus regions used by the Blur workspace (everything outside
+//               them is blurred on export).
 //
-// The two collections never share state or history, which is what keeps the
-// Hotspots and Cut workspaces from bleeding into each other. The flat
-// hotspot API (shapes, addShape, …) is preserved for back-compat with the
-// rest of the app; `hotspots` and `pieces` expose the full collection objects
-// for the parts that need to pick one based on the active workspace.
+// The collections never share state or history, which is what keeps the
+// workspaces from bleeding into each other. The flat hotspot API (shapes,
+// addShape, …) is preserved for back-compat with the rest of the app;
+// `hotspots`, `pieces`, and `blurs` expose the full collection objects for the
+// parts that need to pick one based on the active workspace.
 export function useProject() {
   const [image, setImage] = useState(null);
   const [loaded, setLoaded] = useState(false);
 
   const hotspots = useShapeCollection([]);
   const pieces = useShapeCollection([]);
+  const blurs = useShapeCollection([]);
 
   const { setAll: setHotspots } = hotspots;
   const { setAll: setPieces } = pieces;
+  const { setAll: setBlurs } = blurs;
 
   useEffect(() => {
     let cancelled = false;
     const data = loadProject();
     if (Array.isArray(data?.shapes)) setHotspots(data.shapes);
     if (Array.isArray(data?.pieces)) setPieces(data.pieces);
+    if (Array.isArray(data?.blurs)) setBlurs(data.blurs);
     // Image lives in IndexedDB now. Migrate any legacy inline image and then
     // mark loaded (so the save effects don't fire before we've restored).
     (async () => {
@@ -40,13 +45,13 @@ export function useProject() {
       setLoaded(true);
     })();
     return () => { cancelled = true; };
-  }, [setHotspots, setPieces]);
+  }, [setHotspots, setPieces, setBlurs]);
 
-  // Shapes + pieces are small → localStorage. (History is in-memory only.)
+  // Shapes + pieces + blurs are small → localStorage. (History is in-memory only.)
   useEffect(() => {
     if (!loaded) return;
-    saveProject({ shapes: hotspots.shapes, pieces: pieces.shapes });
-  }, [hotspots.shapes, pieces.shapes, loaded]);
+    saveProject({ shapes: hotspots.shapes, pieces: pieces.shapes, blurs: blurs.shapes });
+  }, [hotspots.shapes, pieces.shapes, blurs.shapes, loaded]);
 
   // The image can be several MB → IndexedDB, written only when it changes so
   // shape edits don't rewrite it.
@@ -82,7 +87,8 @@ export function useProject() {
     setImage(null);
     hotspots.reset();
     pieces.reset();
-  }, [hotspots, pieces]);
+    blurs.reset();
+  }, [hotspots, pieces, blurs]);
 
   // Remove just the background image (shapes/pieces are kept, so a replacement
   // image drops them right back into place).
@@ -94,7 +100,8 @@ export function useProject() {
     setImage(snap?.image ?? null);
     hotspots.setAll(snap?.shapes ?? []);
     pieces.setAll(snap?.pieces ?? []);
-  }, [hotspots, pieces]);
+    blurs.setAll(snap?.blurs ?? []);
+  }, [hotspots, pieces, blurs]);
 
   return {
     image,
@@ -122,5 +129,6 @@ export function useProject() {
     // Full collection objects, for workspace-aware wiring.
     hotspots,
     pieces,
+    blurs,
   };
 }

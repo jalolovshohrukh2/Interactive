@@ -20,6 +20,8 @@ export default function Canvas({
   selectedIds, hoveredId, setHoveredId, svgRef, gRef,
   onMouseDown, onMouseMove, onMouseUp, onMouseLeave, onDoubleClick, onContextMenu,
   viewport, glow = 0.4, showNames = false, imageSelected = false,
+  blurMode = false, blurAmount = 0, blurStroke = 0, blurStrokeColor = '#38bdf8',
+  blurOutside = 'blur', blurFillColor = '#ffffff',
 }) {
   const {
     viewportRef, viewportSize, baseX, baseY, pan, displayScale,
@@ -50,6 +52,8 @@ export default function Canvas({
 
   const selectedSet = new Set(selectedIds);
   const visibleShapes = shapes.filter((s) => !s.hidden);
+  // Blur preview: every region defines a clip area. Polylines are auto-closed.
+  const focusShapes = blurMode ? visibleShapes : [];
   const cursorStyle =
     mode === 'preview' ? 'default' : tool === 'select' ? 'default' : 'crosshair';
 
@@ -83,13 +87,102 @@ export default function Canvas({
           ref={gRef}
           transform={`translate(${baseX + pan.x},${baseY + pan.y}) scale(${displayScale})`}
         >
-          <image
-            href={image.url}
-            x={0} y={0}
-            width={image.width} height={image.height}
-            preserveAspectRatio="none"
-            style={{ pointerEvents: 'none' }}
-          />
+          {blurMode ? (
+            <>
+              <defs>
+                <filter id="blur-preview-filter" x="-10%" y="-10%" width="120%" height="120%">
+                  <feGaussianBlur stdDeviation={Math.max(0, blurAmount)} edgeMode="duplicate" />
+                </filter>
+                {focusShapes.length > 0 && (
+                  <clipPath id="blur-focus-clip">
+                    {focusShapes.map((s) => (
+                      <ClipShape key={s.id} shape={s} />
+                    ))}
+                  </clipPath>
+                )}
+                {blurOutside === 'transparent' && (
+                  <pattern id="blur-transparent-checker" width={16} height={16} patternUnits="userSpaceOnUse">
+                    <rect width={16} height={16} fill="#9aa0a6" />
+                    <rect width={8} height={8} fill="#cfd3d6" />
+                    <rect x={8} y={8} width={8} height={8} fill="#cfd3d6" />
+                  </pattern>
+                )}
+              </defs>
+              {/* The "outside" layer — everything that is NOT a focus region.
+                  Either the blurred image, a solid fill color, or a checker
+                  that signals transparency. The sharp regions are drawn on top. */}
+              {blurOutside === 'color' ? (
+                <rect
+                  x={0} y={0} width={image.width} height={image.height}
+                  fill={blurFillColor}
+                  style={{ pointerEvents: 'none' }}
+                />
+              ) : blurOutside === 'transparent' ? (
+                <rect
+                  x={0} y={0} width={image.width} height={image.height}
+                  fill="url(#blur-transparent-checker)"
+                  style={{ pointerEvents: 'none' }}
+                />
+              ) : (
+                <>
+                  {/* Sharp base keeps the image edges clean under the blur. */}
+                  <image
+                    href={image.url}
+                    x={0} y={0}
+                    width={image.width} height={image.height}
+                    preserveAspectRatio="none"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                  {/* Blurred copy over the whole image. */}
+                  {blurAmount > 0 && (
+                    <image
+                      href={image.url}
+                      x={0} y={0}
+                      width={image.width} height={image.height}
+                      preserveAspectRatio="none"
+                      filter="url(#blur-preview-filter)"
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
+                </>
+              )}
+              {/* Sharp focus regions punched back in. */}
+              {focusShapes.length > 0 && (
+                <g clipPath="url(#blur-focus-clip)" pointerEvents="none">
+                  <image
+                    href={image.url}
+                    x={0} y={0}
+                    width={image.width} height={image.height}
+                    preserveAspectRatio="none"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                </g>
+              )}
+              {/* Colored outline around each sharp region — WYSIWYG with the
+                  exported image. Width is in image px so it scales with zoom. */}
+              {blurStroke > 0 && focusShapes.length > 0 && (
+                <g
+                  pointerEvents="none"
+                  fill="none"
+                  stroke={blurStrokeColor}
+                  strokeWidth={blurStroke}
+                  strokeLinejoin="round"
+                >
+                  {focusShapes.map((s) => (
+                    <ClipShape key={'stroke-' + s.id} shape={s} />
+                  ))}
+                </g>
+              )}
+            </>
+          ) : (
+            <image
+              href={image.url}
+              x={0} y={0}
+              width={image.width} height={image.height}
+              preserveAspectRatio="none"
+              style={{ pointerEvents: 'none' }}
+            />
+          )}
           {imageSelected && (
             <g pointerEvents="none">
               <rect
@@ -139,9 +232,11 @@ export default function Canvas({
               </text>
             );
           })}
+          {/* Pass only the visible shapes so a hidden-but-still-selected region
+              (e.g. after Solo or Hide) doesn't leave dangling handles behind. */}
           {mode === 'edit' && selectedIds.length > 0 && (
             <SelectionHandles
-              shapes={shapes}
+              shapes={visibleShapes}
               selectedIds={selectedIds}
               displayScale={displayScale}
             />
@@ -164,4 +259,21 @@ export default function Canvas({
       />
     </div>
   );
+}
+
+// A focus-region outline emitted as a <clipPath> child for the blur preview.
+// Polylines are treated as closed polygons so they enclose an area like the
+// other region shapes.
+function ClipShape({ shape }) {
+  switch (shape.type) {
+    case 'rect':
+      return <rect x={shape.x} y={shape.y} width={shape.width} height={shape.height} />;
+    case 'ellipse':
+      return <ellipse cx={shape.cx} cy={shape.cy} rx={shape.rx} ry={shape.ry} />;
+    case 'polygon':
+    case 'polyline':
+      return <polygon points={(shape.points || []).map((p) => p.join(',')).join(' ')} />;
+    default:
+      return null;
+  }
 }

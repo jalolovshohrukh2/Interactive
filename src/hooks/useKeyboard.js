@@ -22,8 +22,33 @@ export function useKeyboard({
 }) {
   useEffect(() => {
     const onKey = (e) => {
-      const tag = e.target.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const el = e.target;
+      const tag = el.tagName;
+      const isField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+      // A focused shape-name field swallows every key so the user can type its
+      // name — which made deleting a just-clicked/just-named region take two
+      // tries (the first Delete was eaten by the input). When the caret sits at
+      // the very end of the text with nothing selected, the forward-Delete key
+      // can't edit anything, so treat it as "delete the selected shape" (and
+      // drop focus) instead of doing nothing. We deliberately only hijack
+      // forward-Delete, never Backspace: holding Backspace to clear a name ends
+      // at caret 0, and one extra press there must NOT nuke the shape.
+      if (
+        isField &&
+        hasSelection &&
+        e.key === 'Delete' &&
+        el.dataset && el.dataset.shapeName !== undefined &&
+        el.selectionStart === el.selectionEnd &&
+        el.selectionStart === (el.value ? el.value.length : 0)
+      ) {
+        e.preventDefault();
+        el.blur();
+        deleteSelected();
+        return;
+      }
+
+      if (isField) return;
 
       const ctrl = e.ctrlKey || e.metaKey;
 

@@ -17,15 +17,20 @@ import SpotlightMask from './SpotlightMask.jsx';
 // Stroke widths and animation values divide by displayScale so on-screen
 // thickness is constant regardless of zoom.
 export default function ShapeRender({ shape, isSelected, isHovered, mode, onHover, displayScale = 1, glow = 0 }) {
-  // Cut pieces are drawn in emerald so they read as "crop regions" rather than
-  // interactive hotspots (which stay violet).
+  // Region shapes are color-coded by role so they read distinctly from
+  // interactive hotspots (violet): cut pieces are emerald, blur focus regions
+  // are sky/cyan. Blur regions keep a very light fill so the sharp underlying
+  // image shows through.
   const isCut = shape.role === 'cut';
+  const isBlur = shape.role === 'blur';
 
   const editFill = isCut
     ? (isHovered ? 'rgba(16, 185, 129, 0.22)' : 'rgba(16, 185, 129, 0.14)')
-    : shape.hover === 'fill'
-      ? (shape.fill || '#c4c4c4')
-      : (isHovered ? 'rgba(168, 85, 247, 0.18)' : 'rgba(99, 102, 241, 0.12)');
+    : isBlur
+      ? (isHovered ? 'rgba(56, 189, 248, 0.16)' : 'rgba(56, 189, 248, 0.08)')
+      : shape.hover === 'fill'
+        ? (shape.fill || '#c4c4c4')
+        : (isHovered ? 'rgba(168, 85, 247, 0.18)' : 'rgba(99, 102, 241, 0.12)');
 
   const previewFill = shape.hover === 'fill'
     ? (isHovered ? (shape.hoverFill || '#d8d8d8') : (shape.fill || '#c4c4c4'))
@@ -34,7 +39,9 @@ export default function ShapeRender({ shape, isSelected, isHovered, mode, onHove
   const fill = mode === 'edit' ? editFill : previewFill;
   const editStroke = isCut
     ? (isSelected ? '#34d399' : isHovered ? '#6ee7b7' : '#10b981')
-    : (isSelected ? '#a855f7' : isHovered ? '#c084fc' : '#6366f1');
+    : isBlur
+      ? (isSelected ? '#38bdf8' : isHovered ? '#7dd3fc' : '#0ea5e9')
+      : (isSelected ? '#a855f7' : isHovered ? '#c084fc' : '#6366f1');
   const baseSW = isSelected ? 3 : 2;
 
   // Preview-mode hover effect — mirrors the exported CSS. A thin static
@@ -81,7 +88,12 @@ export default function ShapeRender({ shape, isSelected, isHovered, mode, onHove
       {shape.type === 'polygon' && (
         <polygon {...common} points={shape.points.map((p) => p.join(',')).join(' ')} />
       )}
-      {shape.type === 'polyline' && (
+      {/* In Cut/Blur a polyline marks a region, so render it closed + filled
+          like a polygon. In Hotspots it stays an open, unfilled line. */}
+      {shape.type === 'polyline' && (isCut || isBlur) && (
+        <polygon {...common} points={shape.points.map((p) => p.join(',')).join(' ')} />
+      )}
+      {shape.type === 'polyline' && !isCut && !isBlur && (
         <polyline
           {...common}
           points={shape.points.map((p) => p.join(',')).join(' ')}

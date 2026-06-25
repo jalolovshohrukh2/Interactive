@@ -13,8 +13,10 @@ export default function DetailPanel({ shape, onUpdate, onReorder }) {
         <Label>CSS class</Label>
         <input
           type="text"
+          data-shape-name
           value={shape.className}
           onChange={(e) => onUpdate({ className: e.target.value })}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
           className="w-full mt-1 px-2.5 py-1.5 text-[13px] font-mono bg-[#0a0a0c] border border-[#26262a] rounded text-white"
           placeholder="f01"
         />

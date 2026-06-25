@@ -38,6 +38,21 @@ export default function DraftRender({ draft, cursor, displayScale = 1 }) {
       />
     );
   }
+  if (draft.type === 'lasso') {
+    const pts = draft.points;
+    if (pts.length < 2) return null;
+    const pointsStr = pts.map((p) => p.join(',')).join(' ');
+    return (
+      <polygon
+        points={pointsStr}
+        fill="rgba(168,85,247,0.15)"
+        stroke="#a855f7"
+        strokeWidth={sw}
+        strokeLinejoin="round"
+        pointerEvents="none"
+      />
+    );
+  }
   if (draft.type === 'polygon' || draft.type === 'polyline') {
     const pts = draft.points;
     if (!pts.length) return null;

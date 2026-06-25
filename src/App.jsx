@@ -6,11 +6,16 @@ import { useViewport } from './hooks/useViewport.js';
 import { useCloudSync } from './hooks/useCloudSync.js';
 import { exportSvg } from './lib/exportSvg.js';
 import { importSvg } from './lib/importSvg.js';
-import { cloneShape, makeCutPiece, newId } from './lib/shapes.js';
+import { cloneShape, makeCutPiece, makeBlurRegion, newId } from './lib/shapes.js';
 import { downloadPiecesAsFiles, downloadPiecesAsZip } from './lib/cropPieces.js';
+import { downloadBlurredImage, downloadBlurredImagePerRegion } from './lib/blurExport.js';
 import * as cloud from './lib/cloud.js';
 import {
-  TOOLS, CUT_TOOLS, TOOL_SHORTCUTS, CUT_TOOL_SHORTCUTS, DEFAULT_PIECE_PREFIX,
+  TOOLS, CUT_TOOLS, BLUR_TOOLS,
+  TOOL_SHORTCUTS, CUT_TOOL_SHORTCUTS, BLUR_TOOL_SHORTCUTS,
+  DEFAULT_PIECE_PREFIX, DEFAULT_FOCUS_PREFIX, DEFAULT_BLUR_AMOUNT,
+  DEFAULT_BLUR_STROKE_COLOR, DEFAULT_BLUR_STROKE_WIDTH,
+  DEFAULT_BLUR_OUTSIDE, DEFAULT_BLUR_FILL_COLOR,
 } from './constants.js';
 
 import { Trash2 } from 'lucide-react';
@@ -23,6 +28,7 @@ import Canvas from './components/canvas/Canvas.jsx';
 import EmptyCanvas from './components/canvas/EmptyCanvas.jsx';
 import Sidebar from './components/sidebar/Sidebar.jsx';
 import CutSidebar from './components/sidebar/CutSidebar.jsx';
+import BlurSidebar from './components/sidebar/BlurSidebar.jsx';
 
 // Tiny placeholder for SVG import when the user has no background image yet.
 const blankImage = (w, h) => {
@@ -43,12 +49,12 @@ export default function App() {
   const [imageSelected, setImageSelected] = useState(false);
   const selectBackground = useCallback((v) => setImageSelected(v), []);
 
-  // Top-level workspace: 'hotspots' (the interactive-SVG editor) or 'cut'
-  // (slice the image into image pieces). Each has its own toolset, sidebar,
-  // and shape collection so the two never mix.
+  // Top-level workspace: 'hotspots' (the interactive-SVG editor), 'cut' (slice
+  // the image into pieces), or 'blur' (blur everything except focus regions).
+  // Each has its own toolset, sidebar, and shape collection so they never mix.
   const [workspace, setWorkspaceState] = useState(() => {
     const v = readLS('interactive-image:workspace', 'hotspots');
-    return v === 'cut' ? 'cut' : 'hotspots';
+    return v === 'cut' || v === 'blur' ? v : 'hotspots';
   });
   const setWorkspace = useCallback((w) => {
     setWorkspaceState(w);
@@ -83,6 +89,64 @@ export default function App() {
     try { localStorage.setItem('interactive-image:pieceFormat', v); } catch {}
   }, []);
 
+  // Blur-workspace settings.
+  const [blurAmount, setBlurAmountState] = useState(() => {
+    const v = Number(readLS('interactive-image:blurAmount', String(DEFAULT_BLUR_AMOUNT)));
+    return Number.isFinite(v) && v >= 0 && v <= 50 ? v : DEFAULT_BLUR_AMOUNT;
+  });
+  const setBlurAmount = useCallback((v) => {
+    const n = Math.max(0, Math.min(50, Number(v) || 0));
+    setBlurAmountState(n);
+    try { localStorage.setItem('interactive-image:blurAmount', String(n)); } catch {}
+  }, []);
+  const [blurScale, setBlurScaleState] = useState(() => Number(readLS('interactive-image:blurScale', '1')) || 1);
+  const setBlurScale = useCallback((v) => {
+    setBlurScaleState(v);
+    try { localStorage.setItem('interactive-image:blurScale', String(v)); } catch {}
+  }, []);
+  const [blurFormat, setBlurFormatState] = useState(() => (readLS('interactive-image:blurFormat', 'png') === 'jpeg' ? 'jpeg' : 'png'));
+  const setBlurFormat = useCallback((v) => {
+    setBlurFormatState(v);
+    try { localStorage.setItem('interactive-image:blurFormat', v); } catch {}
+  }, []);
+  const [focusPrefix, setFocusPrefixState] = useState(() => readLS('interactive-image:focusPrefix', DEFAULT_FOCUS_PREFIX));
+  const setFocusPrefix = useCallback((v) => {
+    setFocusPrefixState(v);
+    try { localStorage.setItem('interactive-image:focusPrefix', v); } catch {}
+  }, []);
+  // Optional colored outline drawn around each sharp focus region (px in image
+  // space, 0 = off) and its color.
+  const [blurStroke, setBlurStrokeState] = useState(() => {
+    const v = Number(readLS('interactive-image:blurStroke', String(DEFAULT_BLUR_STROKE_WIDTH)));
+    return Number.isFinite(v) && v >= 0 && v <= 40 ? v : DEFAULT_BLUR_STROKE_WIDTH;
+  });
+  const setBlurStroke = useCallback((v) => {
+    const n = Math.max(0, Math.min(40, Number(v) || 0));
+    setBlurStrokeState(n);
+    try { localStorage.setItem('interactive-image:blurStroke', String(n)); } catch {}
+  }, []);
+  const [blurStrokeColor, setBlurStrokeColorState] = useState(() => readLS('interactive-image:blurStrokeColor', DEFAULT_BLUR_STROKE_COLOR));
+  const setBlurStrokeColor = useCallback((v) => {
+    setBlurStrokeColorState(v);
+    try { localStorage.setItem('interactive-image:blurStrokeColor', v); } catch {}
+  }, []);
+  // How to treat everything OUTSIDE the focus regions: 'blur', 'color', or
+  // 'transparent'. With 'color', everything outside the kept area is painted a
+  // solid color (white/black/anything).
+  const [blurOutside, setBlurOutsideState] = useState(() => {
+    const v = readLS('interactive-image:blurOutside', DEFAULT_BLUR_OUTSIDE);
+    return v === 'color' || v === 'transparent' ? v : 'blur';
+  });
+  const setBlurOutside = useCallback((v) => {
+    setBlurOutsideState(v);
+    try { localStorage.setItem('interactive-image:blurOutside', v); } catch {}
+  }, []);
+  const [blurFillColor, setBlurFillColorState] = useState(() => readLS('interactive-image:blurFillColor', DEFAULT_BLUR_FILL_COLOR));
+  const setBlurFillColor = useCallback((v) => {
+    setBlurFillColorState(v);
+    try { localStorage.setItem('interactive-image:blurFillColor', v); } catch {}
+  }, []);
+
   // One drawing engine per workspace, each bound to its own collection.
   const hotspotDrawing = useDrawing({
     image: project.image,
@@ -103,10 +167,22 @@ export default function App() {
     makeBase: (count) => makeCutPiece(count, (piecePrefix || DEFAULT_PIECE_PREFIX).trim() || DEFAULT_PIECE_PREFIX),
     onBackgroundSelect: selectBackground,
   });
+  const blurDrawing = useDrawing({
+    image: project.image,
+    shapes: project.blurs.shapes,
+    addShape: project.blurs.addShape,
+    setShapesLive: project.blurs.setShapesLive,
+    pushHistory: project.blurs.pushHistory,
+    viewport,
+    makeBase: (count) => makeBlurRegion(count, (focusPrefix || DEFAULT_FOCUS_PREFIX).trim() || DEFAULT_FOCUS_PREFIX),
+    onBackgroundSelect: selectBackground,
+  });
 
+  const isHotspots = workspace === 'hotspots';
   const isCut = workspace === 'cut';
-  const drawing = isCut ? cutDrawing : hotspotDrawing;
-  const activeColl = isCut ? project.pieces : project.hotspots;
+  const isBlur = workspace === 'blur';
+  const drawing = isCut ? cutDrawing : isBlur ? blurDrawing : hotspotDrawing;
+  const activeColl = isCut ? project.pieces : isBlur ? project.blurs : project.hotspots;
   const activeShapes = activeColl.shapes;
 
   // Clipboard: tagged with the workspace it was copied from so a hotspot
@@ -144,7 +220,8 @@ export default function App() {
     setImageSelected(false);
     hotspotDrawing.clearSelection();
     cutDrawing.clearSelection();
-  }, [project, hotspotDrawing, cutDrawing]);
+    blurDrawing.clearSelection();
+  }, [project, hotspotDrawing, cutDrawing, blurDrawing]);
 
   const handleDeleteSelected = useCallback(() => {
     if (imageSelected) { handleDeleteImage(); return; }
@@ -205,10 +282,11 @@ export default function App() {
   const applyRemote = useCallback((remote) => {
     persistProjectId(remote.id);
     setProjectName(remote.name || 'Untitled');
-    project.loadSnapshot({ image: remote.image, shapes: remote.shapes, pieces: remote.pieces });
+    project.loadSnapshot({ image: remote.image, shapes: remote.shapes, pieces: remote.pieces, blurs: remote.blurs });
     hotspotDrawing.clearSelection(); hotspotDrawing.cancelDraft();
     cutDrawing.clearSelection(); cutDrawing.cancelDraft();
-  }, [persistProjectId, setProjectName, project, hotspotDrawing, cutDrawing]);
+    blurDrawing.clearSelection(); blurDrawing.cancelDraft();
+  }, [persistProjectId, setProjectName, project, hotspotDrawing, cutDrawing, blurDrawing]);
 
   const sync = useCloudSync({ enabled: cloudEnabled, project: cloudProject, onApplyRemote: applyRemote });
 
@@ -225,8 +303,9 @@ export default function App() {
     project.clear();
     hotspotDrawing.clearSelection(); hotspotDrawing.cancelDraft();
     cutDrawing.clearSelection(); cutDrawing.cancelDraft();
+    blurDrawing.clearSelection(); blurDrawing.cancelDraft();
     setCloudOpen(false);
-  }, [persistProjectId, setProjectName, project, hotspotDrawing, cutDrawing]);
+  }, [persistProjectId, setProjectName, project, hotspotDrawing, cutDrawing, blurDrawing]);
 
   useKeyboard({
     draft: drawing.draft,
@@ -243,7 +322,7 @@ export default function App() {
     onZoomOut: viewport.zoomOut,
     onResetZoom: viewport.resetView,
     onShowShortcuts: () => setShortcutsOpen(true),
-    toolShortcuts: isCut ? CUT_TOOL_SHORTCUTS : TOOL_SHORTCUTS,
+    toolShortcuts: isCut ? CUT_TOOL_SHORTCUTS : isBlur ? BLUR_TOOL_SHORTCUTS : TOOL_SHORTCUTS,
   });
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -350,7 +429,7 @@ export default function App() {
 
       // 2. SVG markup as text → import as a project (Hotspots only).
       const text = e.clipboardData?.getData('text/plain') || '';
-      if (!isCut && text && looksLikeSvg(text)) {
+      if (isHotspots && text && looksLikeSvg(text)) {
         e.preventDefault();
         importSvgText(text);
         return;
@@ -364,7 +443,7 @@ export default function App() {
     };
     document.addEventListener('paste', onPaste);
     return () => document.removeEventListener('paste', onPaste);
-  }, [importSvgText, handlePaste, isCut, project.uploadImage]);
+  }, [importSvgText, handlePaste, isHotspots, project.uploadImage]);
 
   // Live SVG export — regenerates whenever shapes / image / glow change.
   // The Code tab in the sidebar mirrors this string in real time. Always the
@@ -382,13 +461,14 @@ export default function App() {
   // The "Export SVG" header button just switches the sidebar to the Code tab.
   const handleExport = () => setSidebarTab('code');
 
-  // ---- Reusable layouts (hotspots + pieces, without the image) ----
+  // ---- Reusable layouts (hotspots + pieces + blurs, without the image) ----
   const handleSaveLayout = useCallback(() => {
     const data = {
-      version: 2,
+      version: 3,
       name: projectName,
       shapes: project.shapes,
       pieces: project.pieces.shapes,
+      blurs: project.blurs.shapes,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -398,27 +478,30 @@ export default function App() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  }, [project.shapes, project.pieces.shapes, projectName]);
+  }, [project.shapes, project.pieces.shapes, project.blurs.shapes, projectName]);
 
   const handleLoadLayout = useCallback(async (file) => {
     try {
       const data = JSON.parse(await file.text());
       const shapes = Array.isArray(data.shapes) ? data.shapes : [];
       const pieces = Array.isArray(data.pieces) ? data.pieces : [];
-      if (!shapes.length && !pieces.length) { alert('That file has no layout in it.'); return; }
-      const have = project.shapes.length + project.pieces.shapes.length;
+      const blurs = Array.isArray(data.blurs) ? data.blurs : [];
+      if (!shapes.length && !pieces.length && !blurs.length) { alert('That file has no layout in it.'); return; }
+      const have = project.shapes.length + project.pieces.shapes.length + project.blurs.shapes.length;
       if (have > 0 && !confirm(
-        `Replace your current ${project.shapes.length} hotspot(s) and ${project.pieces.shapes.length} piece(s) with this layout?`
+        `Replace your current ${project.shapes.length} hotspot(s), ${project.pieces.shapes.length} piece(s) and ${project.blurs.shapes.length} blur region(s) with this layout?`
       )) return;
       // Fresh ids so the loaded layout never collides with anything.
       project.hotspots.replaceShapes(shapes.map((s) => ({ ...s, id: newId() })));
       project.pieces.replaceShapes(pieces.map((s) => ({ ...s, id: newId() })));
+      project.blurs.replaceShapes(blurs.map((s) => ({ ...s, id: newId() })));
       hotspotDrawing.clearSelection();
       cutDrawing.clearSelection();
+      blurDrawing.clearSelection();
     } catch (err) {
       alert('Could not read layout file: ' + err.message);
     }
-  }, [project, hotspotDrawing, cutDrawing]);
+  }, [project, hotspotDrawing, cutDrawing, blurDrawing]);
 
   const handleClear = () => {
     if (!confirm('Clear image and all shapes? This cannot be undone.')) return;
@@ -427,6 +510,8 @@ export default function App() {
     hotspotDrawing.cancelDraft();
     cutDrawing.clearSelection();
     cutDrawing.cancelDraft();
+    blurDrawing.clearSelection();
+    blurDrawing.cancelDraft();
   };
 
   // ---- Cut workspace handlers ----
@@ -487,6 +572,75 @@ export default function App() {
     cutDrawing.clearSelection();
   }, [project.image, project.pieces, piecePrefix, cutDrawing]);
 
+  // ---- Blur workspace handlers ----
+  const handleBlurDelete = useCallback((id) => {
+    project.blurs.deleteShape(id);
+    blurDrawing.setSelectedIds(blurDrawing.selectedIds.filter((x) => x !== id));
+  }, [project.blurs, blurDrawing]);
+
+  const handleBlurSelectAll = useCallback(() => {
+    blurDrawing.setSelectedIds(project.blurs.shapes.map((b) => b.id));
+  }, [blurDrawing, project.blurs.shapes]);
+
+  const handleClearBlurs = useCallback(() => {
+    if (!project.blurs.shapes.length) return;
+    if (!confirm('Remove all focus regions?')) return;
+    project.blurs.replaceShapes([]);
+    blurDrawing.clearSelection();
+    blurDrawing.cancelDraft();
+  }, [project.blurs, blurDrawing]);
+
+  const handleExportBlur = useCallback(async () => {
+    if (!project.image) return;
+    const { url, width, height } = project.image;
+    try {
+      await downloadBlurredImage(url, project.blurs.shapes, width, height, {
+        amount: blurAmount,
+        scale: blurScale,
+        format: blurFormat,
+        stroke: blurStroke,
+        strokeColor: blurStrokeColor,
+        outside: blurOutside,
+        fillColor: blurFillColor,
+        name: (projectName || 'blurred').trim() || 'blurred',
+      });
+    } catch (err) {
+      alert('Could not export the blurred image: ' + err.message);
+    }
+  }, [project.image, project.blurs.shapes, blurAmount, blurScale, blurFormat, blurStroke, blurStrokeColor, blurOutside, blurFillColor, projectName]);
+
+  // Export one file per visible region (each keeps only that one region).
+  const handleExportBlurEach = useCallback(async () => {
+    if (!project.image) return;
+    const { url, width, height } = project.image;
+    try {
+      const n = await downloadBlurredImagePerRegion(url, project.blurs.shapes, width, height, {
+        amount: blurAmount,
+        scale: blurScale,
+        format: blurFormat,
+        stroke: blurStroke,
+        strokeColor: blurStrokeColor,
+        outside: blurOutside,
+        fillColor: blurFillColor,
+        name: (focusPrefix || DEFAULT_FOCUS_PREFIX).trim() || DEFAULT_FOCUS_PREFIX,
+      });
+      if (!n) alert('No visible regions to export — draw a region (and make sure it isn’t hidden).');
+    } catch (err) {
+      alert('Could not export the regions: ' + err.message);
+    }
+  }, [project.image, project.blurs.shapes, blurAmount, blurScale, blurFormat, blurStroke, blurStrokeColor, blurOutside, blurFillColor, focusPrefix]);
+
+  // "Solo" a region: show only it (hide the rest). Clicking an already-soloed
+  // region shows everything again. Visibility only, no undo entry — same as the
+  // per-row hide toggle.
+  const handleBlurSolo = useCallback((id) => {
+    const regions = project.blurs.shapes;
+    const isSoloed = regions.length > 1 && regions.every((r) => (r.id === id ? !r.hidden : r.hidden));
+    project.blurs.setShapesLive((arr) =>
+      arr.map((r) => ({ ...r, hidden: isSoloed ? false : r.id !== id }))
+    );
+  }, [project.blurs]);
+
   const hasImage = !!project.image;
   const canExport = hasImage && project.shapes.length > 0;
   const canUndo = activeColl.canUndo || (drawing.draft?.points?.length > 0);
@@ -514,7 +668,7 @@ export default function App() {
           activeTool={drawing.tool}
           onPick={drawing.switchTool}
           disabled={drawing.mode !== 'edit'}
-          tools={isCut ? CUT_TOOLS : TOOLS}
+          tools={isCut ? CUT_TOOLS : isBlur ? BLUR_TOOLS : TOOLS}
         />
 
         <main className="flex-1 min-w-0 relative overflow-hidden bg-[#0f0f10]">
@@ -543,8 +697,14 @@ export default function App() {
               onContextMenu={handleUndo}
               viewport={viewport}
               glow={glow}
-              showNames={isCut}
+              showNames={isCut || isBlur}
               imageSelected={imageSelected}
+              blurMode={isBlur}
+              blurAmount={blurAmount}
+              blurStroke={blurStroke}
+              blurStrokeColor={blurStrokeColor}
+              blurOutside={blurOutside}
+              blurFillColor={blurFillColor}
             />
           )}
 
@@ -593,6 +753,42 @@ export default function App() {
             onPrefixChange={setPiecePrefix}
             onExport={handleExportPieces}
             onGridSlice={handleGridSlice}
+            onSaveLayout={handleSaveLayout}
+            onLoadLayout={handleLoadLayout}
+            hasImage={hasImage}
+          />
+        ) : isBlur ? (
+          <BlurSidebar
+            width={sidebarWidth}
+            onWidthChange={updateSidebarWidth}
+            regions={project.blurs.shapes}
+            selectedIds={drawing.selectedIds}
+            onSelect={handleSidebarSelect}
+            onUpdateName={(id, name) => project.blurs.updateShape(id, { name })}
+            onUpdate={(id, patch) => project.blurs.updateShape(id, patch)}
+            onSolo={handleBlurSolo}
+            onDelete={handleBlurDelete}
+            onSelectAll={handleBlurSelectAll}
+            onSelectNone={drawing.clearSelection}
+            onClearAll={handleClearBlurs}
+            amount={blurAmount}
+            onAmountChange={setBlurAmount}
+            outside={blurOutside}
+            onOutsideChange={setBlurOutside}
+            fillColor={blurFillColor}
+            onFillColorChange={setBlurFillColor}
+            stroke={blurStroke}
+            onStrokeChange={setBlurStroke}
+            strokeColor={blurStrokeColor}
+            onStrokeColorChange={setBlurStrokeColor}
+            scale={blurScale}
+            onScaleChange={setBlurScale}
+            format={blurFormat}
+            onFormatChange={setBlurFormat}
+            prefix={focusPrefix}
+            onPrefixChange={setFocusPrefix}
+            onExport={handleExportBlur}
+            onExportEach={handleExportBlurEach}
             onSaveLayout={handleSaveLayout}
             onLoadLayout={handleLoadLayout}
             hasImage={hasImage}

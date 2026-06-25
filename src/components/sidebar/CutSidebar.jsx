@@ -73,7 +73,8 @@ export default function CutSidebar({
             {hasImage ? (
               <>
                 <Hexagon size={26} strokeWidth={1.5} className="mx-auto mb-3 text-[#3a3a40]" />
-                Pick the <span className="text-emerald-400">Lasso</span> tool and click points around
+                Draw a <span className="text-emerald-400">rectangle</span>, <span className="text-emerald-400">polygon</span>,
+                <span className="text-emerald-400"> polyline</span>, or <span className="text-emerald-400">ellipse</span> over
                 an area — or use <span className="text-[#c4c4c8]">Grid</span> above to auto-slice.
               </>
             ) : (
@@ -201,8 +202,11 @@ function PieceRow({ piece, index, active, onSelect, onUpdateName, onDelete }) {
       <span className="text-[10px] font-mono text-[#5a5a60] w-5 flex-shrink-0 text-right">{index + 1}</span>
       <input
         type="text"
+        data-shape-name
         value={piece.name || ''}
         onClick={(e) => e.stopPropagation()}
+        onFocus={() => onSelect(piece.id)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
         onChange={(e) => onUpdateName(piece.id, e.target.value)}
         className={`flex-1 min-w-0 bg-transparent text-[13px] font-mono outline-none rounded px-1 py-0.5 focus:bg-[#0a0a0c] focus:ring-1 focus:ring-violet-500/40 transition-colors ${
           active ? 'text-white' : 'text-[#c4c4c8]'

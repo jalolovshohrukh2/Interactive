@@ -51,6 +51,12 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
   const spaceHeldRef = useRef(false);
   const panOriginRef = useRef(null);
 
+  // Current draft mirrored into a ref so finishPolyDraft can read it WITHOUT
+  // performing the addShape side effect inside a setState updater — StrictMode
+  // double-invokes updaters in dev, which was committing two shapes per polygon.
+  const draftRef = useRef(null);
+  draftRef.current = draft;
+
   // Selection helpers — clean public API.
   const setSelectedIds = useCallback((ids) => setSelectedIdsState(ids), []);
   const selectOne = useCallback((id) => setSelectedIdsState(id ? [id] : []), []);
@@ -90,18 +96,18 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
     image && p.x >= 0 && p.y >= 0 && p.x <= image.width && p.y <= image.height;
 
   const finishPolyDraft = useCallback(() => {
-    setDraft((d) => {
-      if (!d) return null;
-      const min = d.type === 'polygon' ? 3 : 2;
-      if (d.points.length < min) return null;
+    const d = draftRef.current;
+    if (!d) return;
+    const min = d.type === 'polygon' ? 3 : 2;
+    if (d.points.length >= min) {
       const overrides = d.type === 'polyline' ? { hover: 'fill' } : {};
       const built = buildShapeFromDraft(d, makeBaseRef.current(shapes.length, overrides));
       if (built) {
         addShape(built);
         selectOne(built.id);
       }
-      return null;
-    });
+    }
+    setDraft(null);
     setGuides([]);
   }, [shapes.length, addShape, selectOne]);
 
@@ -202,6 +208,12 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
 
     const threshold = SNAP_THRESHOLD_PX / viewport.displayScale;
 
+    if (tool === 'lasso') {
+      clearSelection();
+      setBg(false);
+      setDraft({ type: 'lasso', points: [[pos.x, pos.y]] });
+      return;
+    }
     if (tool === 'rect' || tool === 'ellipse') {
       const candidates = buildCandidates(shapes, image.width, image.height);
       const snapped = snapPoint({ x: pos.x, y: pos.y, candidates, threshold });
@@ -250,6 +262,19 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
     if (!image) return;
     const pos = getPos(e);
     setCursor(pos);
+
+    // Freehand lasso: append points as the pointer drags (throttled by a
+    // small screen-space distance so we don't capture thousands of points).
+    if (draft?.type === 'lasso') {
+      setDraft((d) => {
+        if (!d) return d;
+        const last = d.points[d.points.length - 1];
+        const minDist = 2.5 / viewport.displayScale;
+        if (distXY(pos.x, pos.y, last[0], last[1]) < minDist) return d;
+        return { ...d, points: [...d.points, [pos.x, pos.y]] };
+      });
+      return;
+    }
 
     const threshold = SNAP_THRESHOLD_PX / viewport.displayScale;
 
@@ -356,6 +381,16 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
       setInteraction(null);
       setGuides([]);
       panOriginRef.current = null;
+      return;
+    }
+    if (draft && draft.type === 'lasso') {
+      const built = buildShapeFromDraft(draft, makeBaseRef.current(shapes.length));
+      if (built) {
+        addShape(built);
+        selectOne(built.id);
+      }
+      setDraft(null);
+      setGuides([]);
       return;
     }
     if (draft && (draft.type === 'rect' || draft.type === 'ellipse')) {

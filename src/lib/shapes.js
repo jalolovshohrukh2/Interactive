@@ -1,4 +1,5 @@
 import { DEFAULT_FILL, DEFAULT_HOVER_FILL } from '../constants.js';
+import { buildFreehandPolygon } from './freehand.js';
 
 export const newId = () =>
   'sh_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -27,6 +28,17 @@ export function makeBaseShape(count, overrides = {}) {
 export function makeCutPiece(count, prefix = 'piece') {
   return {
     role: 'cut',
+    name: `${prefix}-${count + 1}`,
+  };
+}
+
+// Base props for a blur focus region. Like a cut piece it's just a named
+// region — `role: 'blur'` tags it so the renderer colors it distinctly and it
+// never leaks into the hotspot SVG export. Everything OUTSIDE these regions is
+// blurred; the regions themselves stay sharp.
+export function makeBlurRegion(count, prefix = 'focus') {
+  return {
+    role: 'blur',
     name: `${prefix}-${count + 1}`,
   };
 }
@@ -163,6 +175,12 @@ export function buildShapeFromDraft(draft, base) {
   }
   if (draft.type === 'polygon' || draft.type === 'polyline') {
     return { id, type: draft.type, points: draft.points, ...base };
+  }
+  // Freehand lasso → simplified + smoothed closed polygon region.
+  if (draft.type === 'lasso') {
+    const points = buildFreehandPolygon(draft.points);
+    if (points.length < 3) return null;
+    return { id, type: 'polygon', points, ...base };
   }
   return null;
 }
