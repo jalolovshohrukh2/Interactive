@@ -44,7 +44,7 @@ function tracePath(ctx, shape) {
 //   2. Blurred copy on top — the blur samples transparent pixels beyond the
 //      image edge, but the sharp base shows through there so edges stay clean.
 //   3. Sharp focus regions punched back in via a clip path.
-export function renderBlurredCanvas(img, focusShapes, imageW, imageH, { amount = 12, scale = 1, jpeg = false, stroke = 0, strokeColor = '#38bdf8', outside = 'blur', fillColor = '#ffffff' } = {}) {
+export function renderBlurredCanvas(img, focusShapes, imageW, imageH, { amount = 12, scale = 1, jpeg = false, stroke = 0, strokeColor = '#38bdf8', softStroke = false, outside = 'blur', fillColor = '#ffffff' } = {}) {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(imageW * scale));
   canvas.height = Math.max(1, Math.round(imageH * scale));
@@ -83,17 +83,32 @@ export function renderBlurredCanvas(img, focusShapes, imageW, imageH, { amount =
     ctx.restore();
   }
 
-  // 4. Optional colored outline around each sharp region. Stroked per-shape so
-  //    borders never bridge between separate regions. Width is image-space px.
+  // 4. Optional outline around each sharp region. Stroked per-shape so borders
+  //    never bridge between separate regions. Width is image-space px.
   if (stroke > 0 && regions.length) {
     ctx.save();
     ctx.lineJoin = 'round';
-    ctx.lineWidth = stroke;
-    ctx.strokeStyle = strokeColor;
-    for (const s of regions) {
-      ctx.beginPath();
-      tracePath(ctx, s);
-      ctx.stroke();
+    ctx.lineCap = 'round';
+    if (softStroke) {
+      // Smooth, luminous edge: a soft blurred glow plus a slim core, so the
+      // boundary reads elegantly out of the blur instead of as a hard band.
+      ctx.strokeStyle = strokeColor;
+      ctx.shadowColor = strokeColor;
+      const core = Math.max(1, stroke * 0.5);
+      // Two passes build the halo up smoothly (wide-soft, then tighter).
+      for (const [blurMul, lw] of [[3.2, core], [1.4, core]]) {
+        ctx.lineWidth = lw;
+        ctx.shadowBlur = stroke * blurMul;
+        for (const s of regions) { ctx.beginPath(); tracePath(ctx, s); ctx.stroke(); }
+      }
+    } else {
+      ctx.lineWidth = stroke;
+      ctx.strokeStyle = strokeColor;
+      for (const s of regions) {
+        ctx.beginPath();
+        tracePath(ctx, s);
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
@@ -139,6 +154,54 @@ export async function downloadBlurredImage(imageUrl, focusShapes, imageW, imageH
   if (!blob) throw new Error('Could not encode the image.');
   triggerDownload(blob, safeName(opts.name) + ext);
   return true;
+}
+
+// Compose the blurred / color-filled result and return it as a PNG data URL at
+// the image's native resolution (scale 1, so shape coordinates still line up).
+// Used by the Blur workspace's "Save to image" — bake the treatment into the
+// working image so it carries over to Hotspots / Cut.
+export async function bakeBlurredImage(imageUrl, focusShapes, imageW, imageH, opts = {}) {
+  const img = await loadImage(imageUrl);
+  const canvas = renderBlurredCanvas(img, focusShapes, imageW, imageH, {
+    amount: opts.amount ?? 12,
+    scale: 1,
+    jpeg: false,
+    stroke: opts.stroke ?? 0,
+    strokeColor: opts.strokeColor ?? '#38bdf8',
+    outside: opts.outside ?? 'blur',
+    fillColor: opts.fillColor ?? '#ffffff',
+  });
+  return canvas.toDataURL('image/png');
+}
+
+// Like bakeBlurredImage, but ALSO trims to `box` (image-space {x,y,w,h}, e.g.
+// the union of the focus regions) and pads it with an equal `margin` on every
+// side — so the plan comes out centred with identical white borders. Returns the
+// new image plus the (dx, dy) the content shifted by, so callers can move their
+// shapes to keep everything aligned.
+export async function bakeCenteredImage(imageUrl, focusShapes, imageW, imageH, opts = {}) {
+  const img = await loadImage(imageUrl);
+  const full = renderBlurredCanvas(img, focusShapes, imageW, imageH, {
+    amount: opts.amount ?? 12,
+    scale: 1,
+    jpeg: false,
+    stroke: opts.stroke ?? 0,
+    strokeColor: opts.strokeColor ?? '#38bdf8',
+    outside: opts.outside ?? 'blur',
+    fillColor: opts.fillColor ?? '#ffffff',
+  });
+  const box = opts.box;
+  const m = Math.max(0, Math.round(opts.margin ?? 0));
+  const w = Math.max(1, Math.round(box.w) + 2 * m);
+  const h = Math.max(1, Math.round(box.h) + 2 * m);
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(full, box.x, box.y, box.w, box.h, m, m, box.w, box.h);
+  return { url: out.toDataURL('image/png'), width: w, height: h, dx: m - box.x, dy: m - box.y };
 }
 
 // Export ONE file per visible region — each output keeps only that single

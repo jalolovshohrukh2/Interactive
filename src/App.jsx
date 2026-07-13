@@ -6,11 +6,12 @@ import { useViewport } from './hooks/useViewport.js';
 import { useCloudSync } from './hooks/useCloudSync.js';
 import { exportSvg } from './lib/exportSvg.js';
 import { importSvg } from './lib/importSvg.js';
-import { cloneShape, makeBaseShape, makeCutPiece, makeBlurRegion, nextNameNumber, newId } from './lib/shapes.js';
+import { cloneShape, moveShape, makeBaseShape, makeCutPiece, makeBlurRegion, nextNameNumber, newId } from './lib/shapes.js';
 import { downloadPiecesAsFiles, downloadPiecesAsZip } from './lib/cropPieces.js';
 import { downloadBundle } from './lib/exportBundle.js';
 import { growShapeMask } from './lib/magicWand.js';
-import { downloadBlurredImage, downloadBlurredImagePerRegion } from './lib/blurExport.js';
+import { downloadBlurredImage, downloadBlurredImagePerRegion, bakeBlurredImage, bakeCenteredImage } from './lib/blurExport.js';
+import { bbox } from './lib/snap.js';
 import * as cloud from './lib/cloud.js';
 import {
   TOOLS, CUT_TOOLS, BLUR_TOOLS,
@@ -300,8 +301,12 @@ export default function App() {
   }, [drawing.selectedIds]);
 
   const handleUndo = useCallback(() => {
-    if (!drawing.popDraftPoint()) activeColl.undo();
-  }, [drawing, activeColl]);
+    if (drawing.popDraftPoint()) return;
+    // A just-deleted or just-baked image is the freshest undoable action (the
+    // flag clears the moment any shape is edited), so undo reverts it first.
+    if (project.canRestoreImage) { project.restoreImage(); return; }
+    activeColl.undo();
+  }, [drawing, activeColl, project]);
 
   // Single-row click in the sidebar: replace selection.
   // Shift+click in the sidebar: toggle the row in/out of the selection.
@@ -601,6 +606,13 @@ export default function App() {
         // The white margin is a floor-plan thing (framing each apartment). A
         // Building/Project bundle crops its hotspots tight, no padding.
         roomPadding: planType === 'floor' ? 140 : 0,
+        // highlights/: each unit sharp, rest of the plan blurred (uses the Blur
+        // workspace's strength; falls back to a sensible default if it's 0).
+        highlightBlur: blurAmount,
+        // Soft glowing outline marking the sharp/blurred border. Honour the Blur
+        // region-outline settings if set; otherwise a thin, soft warm-white glow.
+        highlightStroke: blurStroke > 0 ? blurStroke : Math.max(3, Math.round(Math.min(width, height) * 0.0032)),
+        highlightStrokeColor: blurStroke > 0 ? blurStrokeColor : '#f3e6c8',
         namePrefix: autoName,
         zipName: autoName + '.zip',
       });
@@ -772,6 +784,64 @@ export default function App() {
     }
   }, [project.image, project.blurs.shapes, blurAmount, blurScale, blurFormat, blurStroke, blurStrokeColor, blurOutside, blurFillColor, projectName]);
 
+  // "Save to image": bake the current blur/fill result into the working image so
+  // it carries over to Hotspots / Cut. Undoable with Ctrl+Z (see applyImage).
+  const handleApplyBlur = useCallback(async () => {
+    if (!project.image) return;
+    const { url, width, height } = project.image;
+    if (!confirm('Bake the current blur/fill into the working image? You can keep editing it in Hotspots or Cut, and undo this with Ctrl+Z.')) return;
+    try {
+      const dataUrl = await bakeBlurredImage(url, project.blurs.shapes, width, height, {
+        amount: blurAmount,
+        stroke: blurStroke,
+        strokeColor: blurStrokeColor,
+        outside: blurOutside,
+        fillColor: blurFillColor,
+      });
+      project.applyImage({ url: dataUrl, width, height });
+    } catch (err) {
+      alert('Could not save the image: ' + err.message);
+    }
+  }, [project, blurAmount, blurStroke, blurStrokeColor, blurOutside, blurFillColor]);
+
+  // "Center on canvas": trim to the focus regions and pad with an equal white
+  // margin on all sides, so the plan is centred with identical borders. All
+  // shapes shift with it (one undoable action).
+  const handleCenterBlur = useCallback(async () => {
+    if (!project.image) return;
+    const { url, width, height } = project.image;
+    const regions = project.blurs.shapes.filter((s) => !s.hidden);
+    if (!regions.length) {
+      alert('Draw a focus region marking the plan area first, then center.');
+      return;
+    }
+    // Union bounding box of the focus regions (integers, so shifts stay exact).
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const s of regions) {
+      const b = bbox(s);
+      x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+      x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h);
+    }
+    const box = { x: Math.floor(x0), y: Math.floor(y0), w: Math.ceil(x1) - Math.floor(x0), h: Math.ceil(y1) - Math.floor(y0) };
+    if (!confirm('Trim to the plan and center it with equal white margins on all sides? Any hotspots move with it, and you can undo with Ctrl+Z.')) return;
+    try {
+      const MARGIN = 180;
+      const framed = await bakeCenteredImage(url, project.blurs.shapes, width, height, {
+        amount: blurAmount, stroke: blurStroke, strokeColor: blurStrokeColor,
+        outside: blurOutside, fillColor: blurFillColor, box, margin: MARGIN,
+      });
+      const { dx, dy } = framed;
+      const after = {
+        hotspots: project.shapes.map((s) => moveShape(s, dx, dy)),
+        pieces: project.pieces.shapes.map((s) => moveShape(s, dx, dy)),
+        blurs: project.blurs.shapes.map((s) => moveShape(s, dx, dy)),
+      };
+      project.frameImage({ url: framed.url, width: framed.width, height: framed.height }, after);
+    } catch (err) {
+      alert('Could not center the image: ' + err.message);
+    }
+  }, [project, blurAmount, blurStroke, blurStrokeColor, blurOutside, blurFillColor]);
+
   // Export one file per visible region (each keeps only that one region).
   const handleExportBlurEach = useCallback(async () => {
     if (!project.image) return;
@@ -806,7 +876,7 @@ export default function App() {
 
   const hasImage = !!project.image;
   const canExport = hasImage && project.shapes.length > 0;
-  const canUndo = activeColl.canUndo || (drawing.draft?.points?.length > 0);
+  const canUndo = activeColl.canUndo || (drawing.draft?.points?.length > 0) || project.canRestoreImage;
 
   return (
     <div className="h-full flex flex-col bg-[#0f0f10] text-[#e8e8e8]">
@@ -991,6 +1061,8 @@ export default function App() {
             onPrefixChange={setFocusPrefix}
             onExport={handleExportBlur}
             onExportEach={handleExportBlurEach}
+            onApply={handleApplyBlur}
+            onCenter={handleCenterBlur}
             onSaveLayout={handleSaveLayout}
             onLoadLayout={handleLoadLayout}
             hasImage={hasImage}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Droplet, Download, X, Check, Eye, EyeOff, CircleDot } from 'lucide-react';
+import { Droplet, Download, X, Check, Eye, EyeOff, CircleDot, Save, Crop } from 'lucide-react';
 import ResizableAside from './ResizableAside.jsx';
 import LayoutControls from './LayoutControls.jsx';
 import Slider from '../ui/Slider.jsx';
@@ -21,7 +21,7 @@ export default function BlurSidebar({
   scale, onScaleChange,
   format, onFormatChange,
   prefix, onPrefixChange,
-  onExport, onExportEach,
+  onExport, onExportEach, onApply, onCenter,
   onSaveLayout, onLoadLayout,
   hasImage,
 }) {
@@ -46,6 +46,20 @@ export default function BlurSidebar({
     if (!hasImage || busy) return;
     setBusy(true);
     try { await onExportEach(); }
+    finally { setBusy(false); }
+  };
+
+  const runApply = async () => {
+    if (!hasImage || busy) return;
+    setBusy(true);
+    try { await onApply(); }
+    finally { setBusy(false); }
+  };
+
+  const runCenter = async () => {
+    if (!hasImage || busy) return;
+    setBusy(true);
+    try { await onCenter(); }
     finally { setBusy(false); }
   };
 
@@ -160,6 +174,33 @@ export default function BlurSidebar({
       {/* Export controls */}
       {hasImage && (
         <div className="border-t border-[#1f1f22] flex-shrink-0 p-4 flex flex-col gap-3">
+          {/* Bake the result into the working image and keep editing it. */}
+          <button
+            onClick={runApply}
+            disabled={busy}
+            className="flex items-center justify-center gap-2 h-9 rounded-md bg-emerald-500 text-[#04231a] text-[12.5px] font-semibold hover:bg-emerald-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Save size={13} strokeWidth={2.5} />
+            {busy ? 'Saving…' : 'Save to image'}
+          </button>
+          <div className="text-[10.5px] text-[#5a5a60] leading-snug -mt-1">
+            Bakes this result into the working image so you can keep editing it in Hotspots or Cut. Undo with Ctrl+Z.
+          </div>
+
+          <button
+            onClick={runCenter}
+            disabled={busy}
+            className="flex items-center justify-center gap-2 h-9 rounded-md border border-emerald-500/40 text-emerald-300 text-[12.5px] font-semibold hover:bg-emerald-500/10 hover:border-emerald-500/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Crop size={13} strokeWidth={2.5} />
+            {busy ? 'Working…' : 'Center on canvas'}
+          </button>
+          <div className="text-[10.5px] text-[#5a5a60] leading-snug -mt-1">
+            Trims to your focus region and adds an equal white margin all around, so the plan sits centered. Bakes it in + shifts hotspots; undo with Ctrl+Z.
+          </div>
+
+          <div className="border-t border-[#1f1f22] pt-3 flex flex-col gap-3">
+          <div className="text-[10px] uppercase tracking-wider text-[#6a6a70] font-medium">Or download a copy</div>
           <div className="grid grid-cols-2 gap-2">
             <div>
               <Label>Format</Label>
@@ -211,6 +252,7 @@ export default function BlurSidebar({
               if (!visibleCount) return `All regions hidden — the whole image will be ${treat}.`;
               return `Everything outside your ${visibleCount} visible region${visibleCount > 1 ? 's' : ''} is ${treat}.`;
             })()}
+          </div>
           </div>
 
           {!!regions.length && (

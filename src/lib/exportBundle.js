@@ -9,8 +9,10 @@ import { renderBlurredCanvas } from './blurExport.js';
 //   - floor-plan-white.png  the whole image with everything OUTSIDE the shapes
 //                           painted white (a clean plan showing only the units)
 //   - rooms/<name>.png      each shape cropped to its outline on a white bg
-// so you draw the apartments once and get the SVG, the room cut-outs, and the
-// clean plan from that same geometry.
+//   - highlights/<name>.png the whole plan with that one unit sharp and the
+//                           rest blurred (in-context shot per apartment)
+// so you draw the apartments once and get the SVG, the room cut-outs, the
+// per-unit highlights, and the clean plan from that same geometry.
 
 function loadImage(url) {
   return new Promise((resolve, reject) => {
@@ -50,6 +52,7 @@ export async function downloadBundle({
   floorShapes, floorOutside = 'color', floorFillColor = '#ffffff',
   floorAmount = 12, floorStroke = 0, floorStrokeColor = '#38bdf8',
   format = 'png', scale = 1, mask = true, bg = 'white', roomPadding = 140,
+  highlightBlur = 0, highlightStroke = 0, highlightStrokeColor = '#f3e6c8',
   namePrefix = '', zipName = 'plan-bundle.zip',
 } = {}) {
   const visible = (shapes || []).filter((s) => !s.hidden);
@@ -98,6 +101,28 @@ export async function downloadBundle({
     rooms++;
   }
 
+  // 3b. One "highlight" per unit: the WHOLE plan with just that unit kept sharp
+  //     and everything else blurred (the Blur workspace's per-region export, but
+  //     driven by the hotspot shapes). Gives an in-context shot of each apartment.
+  const hAmount = highlightBlur > 0 ? highlightBlur : (floorAmount > 0 ? floorAmount : 14);
+  const seenH = new Map();
+  let highlights = 0;
+  for (const shape of visible) {
+    const canvas = renderBlurredCanvas(img, [shape], imageW, imageH, {
+      amount: hAmount, scale, jpeg, outside: 'blur',
+      // A soft luminous outline marks the border between the sharp unit and blur.
+      stroke: highlightStroke, strokeColor: highlightStrokeColor, softStroke: true,
+    });
+    const blob = await canvasToBlob(canvas, jpeg);
+    if (!blob) continue;
+    const cat = shape.category || 'other';
+    const unit = safeName(shape.className || shape.name);
+    const labeled = namePrefix ? `${safeName(namePrefix)} - ${unit}` : unit;
+    const name = uniqueName(`${cat}/${labeled}`, seenH);
+    zip.file('highlights/' + name + ext, blob);
+    highlights++;
+  }
+
   // 4. Machine-readable manifest + a human-readable summary, so the building,
   //    floors, and each unit's category travel with the download.
   const b = building || {};
@@ -113,15 +138,15 @@ export async function downloadBundle({
     })),
   };
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
-  zip.file('info.txt', buildInfoText(manifest));
+  zip.file('info.txt', buildInfoText(manifest, { rooms, highlights }));
 
   const out = await zip.generateAsync({ type: 'blob' });
   triggerDownload(out, zipName);
-  return { rooms };
+  return { rooms, highlights };
 }
 
 // Human-readable summary of the bundle contents, grouped by category.
-function buildInfoText(m) {
+function buildInfoText(m, counts = {}) {
   const floors = m.floorFrom || m.floorTo ? `${m.floorFrom || '?'}-${m.floorTo || '?'}` : '(not set)';
   const byCat = {};
   for (const h of m.hotspots) {
@@ -134,6 +159,13 @@ function buildInfoText(m) {
     // Floor range only means something on a floor plan (elsewhere floors ARE the hotspots).
     ...(m.planType === 'floor' || m.floorFrom || m.floorTo ? [`Floors covered: ${floors}`] : []),
     `Units: ${m.hotspots.length}`,
+    '',
+    'Files:',
+    '  interactive.svg  - clickable hotspot overlay (hover effects baked in)',
+    '  floor-plan.*     - clean plan (everything outside the floor area filled)',
+    `  rooms/           - ${counts.rooms ?? 0} per-unit crop(s), one image per apartment`,
+    `  highlights/      - ${counts.highlights ?? 0} in-context shot(s): that unit sharp, rest of the plan blurred`,
+    '  manifest.json    - machine-readable list of every unit',
     '',
   ];
   for (const c of Object.keys(byCat)) {
