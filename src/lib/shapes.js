@@ -4,9 +4,23 @@ import { buildFreehandPolygon } from './freehand.js';
 export const newId = () =>
   'sh_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+// Next free number for a name prefix — e.g. nextNameNumber('Store', shapes) is
+// 3 when "Store 1" and "Store 2" exist. Reads the highest existing number so
+// deletions don't cause collisions; matches "Store 3" and "Store3", any case.
+export function nextNameNumber(prefix, shapes) {
+  const esc = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('^\\s*' + esc + '\\s*(\\d+)\\s*$', 'i');
+  let max = 0;
+  for (const s of shapes || []) {
+    const m = (s.className || '').match(re);
+    if (m) { const n = parseInt(m[1], 10); if (n > max) max = n; }
+  }
+  return max + 1;
+}
+
 export function makeBaseShape(count, overrides = {}) {
   return {
-    className: `f${String(count + 1).padStart(2, '0')}`,
+    className: `Apt ${count + 1}`,
     hover: 'spotlight',
     fill: DEFAULT_FILL,
     hoverFill: DEFAULT_HOVER_FILL,
@@ -51,7 +65,12 @@ export function moveShape(s, dx, dy) {
       return { ...s, cx: s.cx + dx, cy: s.cy + dy };
     case 'polygon':
     case 'polyline':
-      return { ...s, points: s.points.map(([x, y]) => [x + dx, y + dy]) };
+      return {
+        ...s,
+        points: s.points.map(([x, y]) => [x + dx, y + dy]),
+        // Curve control points are absolute, so they move with the shape too.
+        ...(s.curves ? { curves: s.curves.map((c) => (c ? [c[0] + dx, c[1] + dy] : c)) } : null),
+      };
     default:
       return s;
   }
@@ -143,6 +162,16 @@ export function updateVertex(s, idx, pos) {
   return { ...s, points: s.points.map((p, i) => (i === idx ? [pos.x, pos.y] : p)) };
 }
 
+// Bow (or straighten) the edge from points[edgeIdx] → points[edgeIdx+1].
+// `control` is the quadratic control point, or null to make it straight again.
+export function setEdgeCurve(s, edgeIdx, control) {
+  if (s.type !== 'polygon' && s.type !== 'polyline') return s;
+  const n = s.points.length;
+  const curves = Array.from({ length: n }, (_, i) => (s.curves ? s.curves[i] : null) || null);
+  curves[edgeIdx] = control || null;
+  return { ...s, curves };
+}
+
 // Deep-clone a shape with a fresh id and a positional offset.
 // Used for Ctrl+V paste — caller can override the className suffix.
 export function cloneShape(s, { offset = 20 } = {}) {
@@ -154,7 +183,11 @@ export function cloneShape(s, { offset = 20 } = {}) {
       return { ...s, id, cx: s.cx + offset, cy: s.cy + offset };
     case 'polygon':
     case 'polyline':
-      return { ...s, id, points: s.points.map(([x, y]) => [x + offset, y + offset]) };
+      return {
+        ...s, id,
+        points: s.points.map(([x, y]) => [x + offset, y + offset]),
+        ...(s.curves ? { curves: s.curves.map((c) => (c ? [c[0] + offset, c[1] + offset] : c)) } : null),
+      };
     default:
       return { ...s, id };
   }

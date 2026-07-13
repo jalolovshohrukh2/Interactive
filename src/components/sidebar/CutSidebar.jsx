@@ -12,6 +12,7 @@ export default function CutSidebar({
   pieces, selectedIds, onSelect, onUpdateName, onDelete,
   onSelectAll, onSelectNone, onClearAll,
   mask, onMaskChange,
+  bg, onBgChange,
   padding, onPaddingChange,
   scale, onScaleChange,
   format, onFormatChange,
@@ -112,6 +113,18 @@ export default function CutSidebar({
             </span>
             <span className="text-[12px] text-[#c4c4c8]">Transparent outside outline</span>
           </button>
+
+          <div>
+            <Label>Background</Label>
+            <Seg
+              options={[['transparent', 'Transparent'], ['white', 'White']]}
+              value={format === 'jpeg' ? 'white' : bg}
+              onChange={onBgChange}
+            />
+            {format === 'jpeg' && (
+              <div className="mt-1 text-[10.5px] text-[#5a5a60] leading-snug">JPG has no transparency — always white.</div>
+            )}
+          </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div>

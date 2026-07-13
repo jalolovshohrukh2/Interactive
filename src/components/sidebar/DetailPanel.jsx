@@ -1,11 +1,12 @@
-import { ChevronsUp, ChevronUp, ChevronDown, ChevronsDown } from 'lucide-react';
+import { ChevronsUp, ChevronUp, ChevronDown, ChevronsDown, Plus, Minus } from 'lucide-react';
 import Label from '../ui/Label.jsx';
 import ColorInput from '../ui/ColorInput.jsx';
 import Slider from '../ui/Slider.jsx';
 import { HOVER_LABEL } from '../../constants.js';
 
-export default function DetailPanel({ shape, onUpdate, onReorder }) {
+export default function DetailPanel({ shape, onUpdate, onReorder, onGrow }) {
   const canSpotlight = shape.type !== 'polyline';
+  const GROW_STEP = 5; // image px per click
 
   return (
     <div className="p-4 space-y-3">
@@ -18,29 +19,7 @@ export default function DetailPanel({ shape, onUpdate, onReorder }) {
           onChange={(e) => onUpdate({ className: e.target.value })}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
           className="w-full mt-1 px-2.5 py-1.5 text-[13px] font-mono bg-[#0a0a0c] border border-[#26262a] rounded text-white"
-          placeholder="f01"
-        />
-      </div>
-
-      <div>
-        <Label>Link (URL)</Label>
-        <input
-          type="url"
-          value={shape.link || ''}
-          onChange={(e) => onUpdate({ link: e.target.value })}
-          className="w-full mt-1 px-2.5 py-1.5 text-[13px] bg-[#0a0a0c] border border-[#26262a] rounded text-white outline-none focus:border-violet-500/60 transition-colors"
-          placeholder="https://…  (makes it clickable)"
-        />
-      </div>
-
-      <div>
-        <Label>Hover label</Label>
-        <input
-          type="text"
-          value={shape.label || ''}
-          onChange={(e) => onUpdate({ label: e.target.value })}
-          className="w-full mt-1 px-2.5 py-1.5 text-[13px] bg-[#0a0a0c] border border-[#26262a] rounded text-white outline-none focus:border-violet-500/60 transition-colors"
-          placeholder="e.g. Apt 12 — Available"
+          placeholder="Apt 1"
         />
       </div>
 
@@ -100,6 +79,29 @@ export default function DetailPanel({ shape, onUpdate, onReorder }) {
           format={(v) => `${v.toFixed(2)}s`}
         />
       </div>
+
+      {onGrow && (
+        <div>
+          <Label>Grow / shrink outline</Label>
+          <div className="grid grid-cols-2 gap-1.5 mt-1">
+            <button
+              onClick={() => onGrow(-GROW_STEP)}
+              className="flex items-center justify-center gap-1 h-8 rounded border border-[#26262a] text-[12px] text-[#c4c4c8] hover:border-[#3a3a3e] hover:text-white transition-colors"
+            >
+              <Minus size={13} /> Shrink
+            </button>
+            <button
+              onClick={() => onGrow(GROW_STEP)}
+              className="flex items-center justify-center gap-1 h-8 rounded border border-[#26262a] text-[12px] text-[#c4c4c8] hover:border-violet-500/50 hover:text-white transition-colors"
+            >
+              <Plus size={13} /> Grow
+            </button>
+          </div>
+          <div className="text-[10px] text-[#5a5a60] mt-1 leading-snug">
+            Nudge the boundary outward (onto the walls) or back in — ~{GROW_STEP}px per click. Click a few times to reach the wall.
+          </div>
+        </div>
+      )}
 
       <div>
         <Label>Arrange</Label>

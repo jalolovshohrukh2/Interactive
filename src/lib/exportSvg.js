@@ -2,6 +2,8 @@
 // Matches the target format: <defs><style> with per-class rules,
 // then per-shape: shape element + (if spotlight) immediate <path> sibling
 // that darkens everything EXCEPT the shape on hover.
+import { statusOf } from './status.js';
+import { hasCurves, polygonPathD } from './pathGeom.js';
 
 const r2 = (n) => Math.round(n * 100) / 100;
 
@@ -16,7 +18,15 @@ const escapeXml = (s) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 
-const titleTag = (shape) => (shape.label ? `<title>${escapeXml(shape.label)}</title>` : '');
+const titleTag = (shape) => {
+  const st = statusOf(shape);
+  if (st) {
+    // Sales tooltip: unit name, status, and price/note when present.
+    const parts = [shape.label || shape.className, st.label, shape.price].filter(Boolean);
+    return parts.length ? `<title>${escapeXml(parts.join(' · '))}</title>` : '';
+  }
+  return shape.label ? `<title>${escapeXml(shape.label)}</title>` : '';
+};
 
 function polygonPointsAttr(points) {
   return points.map(([x, y]) => `${r2(x)} ${r2(y)}`).join(' ');
@@ -47,21 +57,31 @@ function ellipseAsPathSubpath(cx, cy, rx, ry) {
 
 function shapeElement(shape) {
   const cls = escapeClass(shape.className);
+  const st = statusOf(shape);
+  const dataAttrs =
+    (shape.category ? ` data-category="${escapeXml(shape.category)}"` : '') +
+    (st ? ` data-status="${escapeXml(shape.status)}"` : '') +
+    (shape.price ? ` data-price="${escapeXml(shape.price)}"` : '');
   const t = titleTag(shape);
   // With a title we need an open/close element so <title> can be a child;
   // without one we keep the compact self-closing form.
   const el = (tag, attrs) => (t ? `<${tag} ${attrs}>${t}</${tag}>` : `<${tag} ${attrs}/>`);
+  const curved = hasCurves(shape);
   switch (shape.type) {
     case 'polygon':
-      return el('polygon', `class="${cls}" points="${polygonPointsAttr(shape.points)}"`);
+      return curved
+        ? el('path', `class="${cls}"${dataAttrs} d="${polygonPathD(shape.points, shape.curves, true)}"`)
+        : el('polygon', `class="${cls}"${dataAttrs} points="${polygonPointsAttr(shape.points)}"`);
     case 'rect':
-      return el('rect', `class="${cls}" x="${r2(shape.x)}" y="${r2(shape.y)}" width="${r2(shape.width)}" height="${r2(shape.height)}"`);
+      return el('rect', `class="${cls}"${dataAttrs} x="${r2(shape.x)}" y="${r2(shape.y)}" width="${r2(shape.width)}" height="${r2(shape.height)}"`);
     case 'polyline':
-      return el('polyline', `class="${cls}" points="${polygonPointsAttr(shape.points)}" fill="none" stroke="currentColor" stroke-width="2"`);
+      return curved
+        ? el('path', `class="${cls}"${dataAttrs} d="${polygonPathD(shape.points, shape.curves, false)}" fill="none" stroke="currentColor" stroke-width="2"`)
+        : el('polyline', `class="${cls}"${dataAttrs} points="${polygonPointsAttr(shape.points)}" fill="none" stroke="currentColor" stroke-width="2"`);
     case 'ellipse':
-      return el('ellipse', `class="${cls}" cx="${r2(shape.cx)}" cy="${r2(shape.cy)}" rx="${r2(shape.rx)}" ry="${r2(shape.ry)}"`);
+      return el('ellipse', `class="${cls}"${dataAttrs} cx="${r2(shape.cx)}" cy="${r2(shape.cy)}" rx="${r2(shape.rx)}" ry="${r2(shape.ry)}"`);
     case 'circle':
-      return el('circle', `class="${cls}" cx="${r2(shape.cx)}" cy="${r2(shape.cy)}" r="${r2(shape.r)}"`);
+      return el('circle', `class="${cls}"${dataAttrs} cx="${r2(shape.cx)}" cy="${r2(shape.cy)}" r="${r2(shape.r)}"`);
     default:
       return '';
   }
@@ -74,7 +94,7 @@ function bgPathFor(shape, W, H) {
   let inner = '';
   switch (shape.type) {
     case 'polygon':
-      inner = polygonAsPathSubpath(shape.points);
+      inner = hasCurves(shape) ? polygonPathD(shape.points, shape.curves, true) : polygonAsPathSubpath(shape.points);
       break;
     case 'rect':
       inner = rectAsPathSubpath(shape.x, shape.y, shape.width, shape.height);
@@ -123,7 +143,12 @@ function buildStyles(shapes, glow = 0) {
     if (!cls) continue;
     const opacity = s.opacity ?? 0.7;
     const transition = s.transition ?? 0.2;
-    if (s.hover === 'spotlight') {
+    const st = statusOf(s);
+    if (st) {
+      // A sales status colors the unit as a translucent fill (alpha baked into
+      // the color, so opacity stays 1) regardless of its own hover mode.
+      fill.set(cls, { fill: st.fill, hoverFill: st.hoverFill, opacity: 1, transition });
+    } else if (s.hover === 'spotlight') {
       spotlight.set(cls, { opacity, transition });
     } else {
       fill.set(cls, {
@@ -165,15 +190,46 @@ function buildStyles(shapes, glow = 0) {
   return rules.join('\n');
 }
 
-export function exportSvg({ width, height, shapes, glow = 0 }) {
+export function exportSvg({ width, height, shapes, glow = 0, building }) {
   const W = width || 1661;
   const H = height || 1080;
   const styleBlock = buildStyles(shapes, glow);
 
+  // Descriptive metadata: building + floor range as attributes on the root, plus
+  // a JSON manifest of every hotspot (name, category, link, label) so the data
+  // travels with the file and stays machine-readable.
+  const b = building || {};
+  const bType = (b.planType || '').trim();
+  const bName = (b.name || '').trim();
+  const bFrom = String(b.floorFrom ?? '').trim();
+  const bTo = String(b.floorTo ?? '').trim();
+  const rootAttrs = [
+    bType && `data-plan-type="${escapeXml(bType)}"`,
+    // Project-level files name the complex; building/floor files name the building.
+    bName && (bType === 'project' ? `data-project="${escapeXml(bName)}"` : `data-building="${escapeXml(bName)}"`),
+    bFrom && `data-floor-from="${escapeXml(bFrom)}"`,
+    bTo && `data-floor-to="${escapeXml(bTo)}"`,
+  ].filter(Boolean).join(' ');
+  const manifest = {
+    planType: bType,
+    building: bName,
+    floorFrom: bFrom,
+    floorTo: bTo,
+    hotspots: shapes.map((s) => ({
+      name: s.className || '',
+      category: s.category || '',
+      status: s.status && s.status !== 'none' ? s.status : '',
+      price: s.price || '',
+      link: s.link || '',
+      label: s.label || '',
+    })),
+  };
+  const metadata = `<metadata id="floorplan-metadata">${escapeXml(JSON.stringify(manifest))}</metadata>`;
+
   const body = shapes
     .map((s) => {
       const main = shapeElement(s);
-      let el = (s.hover === 'spotlight' && s.type !== 'polyline')
+      let el = (s.hover === 'spotlight' && !statusOf(s) && s.type !== 'polyline')
         ? main + '\n  ' + bgPathFor(s, W, H)
         : main;
       // A link turns the hotspot into a navigable <a>. Opens in a new tab.
@@ -185,12 +241,13 @@ export function exportSvg({ width, height, shapes, glow = 0 }) {
     .join('\n  ');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 ${W} ${H}">
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 ${W} ${H}"${rootAttrs ? ' ' + rootAttrs : ''}>
   <defs>
     <style>
 ${styleBlock}
     </style>
   </defs>
+  ${metadata}
   ${body}
 </svg>
 `;

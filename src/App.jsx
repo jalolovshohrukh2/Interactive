@@ -6,8 +6,10 @@ import { useViewport } from './hooks/useViewport.js';
 import { useCloudSync } from './hooks/useCloudSync.js';
 import { exportSvg } from './lib/exportSvg.js';
 import { importSvg } from './lib/importSvg.js';
-import { cloneShape, makeCutPiece, makeBlurRegion, newId } from './lib/shapes.js';
+import { cloneShape, makeBaseShape, makeCutPiece, makeBlurRegion, nextNameNumber, newId } from './lib/shapes.js';
 import { downloadPiecesAsFiles, downloadPiecesAsZip } from './lib/cropPieces.js';
+import { downloadBundle } from './lib/exportBundle.js';
+import { growShapeMask } from './lib/magicWand.js';
 import { downloadBlurredImage, downloadBlurredImagePerRegion } from './lib/blurExport.js';
 import * as cloud from './lib/cloud.js';
 import {
@@ -16,9 +18,12 @@ import {
   DEFAULT_PIECE_PREFIX, DEFAULT_FOCUS_PREFIX, DEFAULT_BLUR_AMOUNT,
   DEFAULT_BLUR_STROKE_COLOR, DEFAULT_BLUR_STROKE_WIDTH,
   DEFAULT_BLUR_OUTSIDE, DEFAULT_BLUR_FILL_COLOR,
+  HOTSPOT_CATEGORIES, DEFAULT_HOTSPOT_CATEGORY,
+  PLAN_TYPES, DEFAULT_PLAN_TYPE, PROJECT_PLAN_CATEGORIES, BUILDING_PLAN_CATEGORIES,
+  DEFAULT_WAND_TOLERANCE,
 } from './constants.js';
 
-import { Trash2 } from 'lucide-react';
+import { Trash2, ZoomIn, Wand2 } from 'lucide-react';
 import Header from './components/Header.jsx';
 import Toolbar from './components/Toolbar.jsx';
 import StatusBar from './components/StatusBar.jsx';
@@ -71,6 +76,11 @@ export default function App() {
   const setPieceMask = useCallback((v) => {
     setPieceMaskState(v);
     try { localStorage.setItem('interactive-image:pieceMask', v ? 'true' : 'false'); } catch {}
+  }, []);
+  const [pieceBg, setPieceBgState] = useState(() => readLS('interactive-image:pieceBg', 'white'));
+  const setPieceBg = useCallback((v) => {
+    setPieceBgState(v);
+    try { localStorage.setItem('interactive-image:pieceBg', v); } catch {}
   }, []);
   const [piecePadding, setPiecePaddingState] = useState(() => Number(readLS('interactive-image:piecePadding', '0')) || 0);
   const setPiecePadding = useCallback((v) => {
@@ -147,6 +157,46 @@ export default function App() {
     try { localStorage.setItem('interactive-image:blurFillColor', v); } catch {}
   }, []);
 
+  // What this document is: 'project' (master plan; hotspots = buildings),
+  // 'building' (one building; hotspots = floors) or 'floor' (current system).
+  const [planType, setPlanTypeState] = useState(() => {
+    const v = readLS('interactive-image:planType', DEFAULT_PLAN_TYPE);
+    return PLAN_TYPES.some((p) => p.id === v) ? v : DEFAULT_PLAN_TYPE;
+  });
+  const setPlanType = useCallback((v) => {
+    setPlanTypeState(v);
+    try { localStorage.setItem('interactive-image:planType', v); } catch {}
+  }, []);
+
+  // Current hotspot category — decides how a newly drawn hotspot is named
+  // (Apartment → "Apt N", Store → "Store N", …), numbered per category.
+  const [hotspotCategory, setHotspotCategoryState] = useState(() => {
+    const v = readLS('interactive-image:hotspotCategory', DEFAULT_HOTSPOT_CATEGORY);
+    return HOTSPOT_CATEGORIES.some((c) => c.id === v) ? v : DEFAULT_HOTSPOT_CATEGORY;
+  });
+  const setHotspotCategory = useCallback((v) => {
+    setHotspotCategoryState(v);
+    try { localStorage.setItem('interactive-image:hotspotCategory', v); } catch {}
+  }, []);
+
+  // Magic-wand color tolerance (max RGB distance from the clicked pixel).
+  // Defined before the drawing engines because they take it as an option.
+  const [wandTolerance, setWandToleranceState] = useState(() => {
+    const v = Number(readLS('interactive-image:wandTolerance', String(DEFAULT_WAND_TOLERANCE)));
+    return Number.isFinite(v) && v >= 1 && v <= 120 ? v : DEFAULT_WAND_TOLERANCE;
+  });
+  const setWandTolerance = useCallback((v) => {
+    const n = Math.max(1, Math.min(120, Number(v) || DEFAULT_WAND_TOLERANCE));
+    setWandToleranceState(n);
+    try { localStorage.setItem('interactive-image:wandTolerance', String(n)); } catch {}
+  }, []);
+  // The categories available at the current plan level. Project/building levels
+  // have exactly one (Building / Floor); floor plans keep the full picker.
+  const activeCategories =
+    planType === 'project' ? PROJECT_PLAN_CATEGORIES
+    : planType === 'building' ? BUILDING_PLAN_CATEGORIES
+    : HOTSPOT_CATEGORIES;
+
   // One drawing engine per workspace, each bound to its own collection.
   const hotspotDrawing = useDrawing({
     image: project.image,
@@ -156,6 +206,17 @@ export default function App() {
     pushHistory: project.pushHistory,
     viewport,
     onBackgroundSelect: selectBackground,
+    wandTolerance,
+    makeBase: (count, overrides) => {
+      // Single-category levels (project/building) always use their category;
+      // floor plans use whichever the user picked in the dropdown.
+      const cat =
+        activeCategories.length === 1
+          ? activeCategories[0]
+          : activeCategories.find((c) => c.id === hotspotCategory) || activeCategories[0];
+      const n = nextNameNumber(cat.prefix, project.shapes);
+      return makeBaseShape(count, { ...overrides, className: `${cat.prefix} ${n}`, category: cat.id });
+    },
   });
   const cutDrawing = useDrawing({
     image: project.image,
@@ -166,6 +227,7 @@ export default function App() {
     viewport,
     makeBase: (count) => makeCutPiece(count, (piecePrefix || DEFAULT_PIECE_PREFIX).trim() || DEFAULT_PIECE_PREFIX),
     onBackgroundSelect: selectBackground,
+    wandTolerance,
   });
   const blurDrawing = useDrawing({
     image: project.image,
@@ -176,6 +238,7 @@ export default function App() {
     viewport,
     makeBase: (count) => makeBlurRegion(count, (focusPrefix || DEFAULT_FOCUS_PREFIX).trim() || DEFAULT_FOCUS_PREFIX),
     onBackgroundSelect: selectBackground,
+    wandTolerance,
   });
 
   const isHotspots = workspace === 'hotspots';
@@ -267,6 +330,31 @@ export default function App() {
     setProjectNameState(n);
     try { localStorage.setItem('interactive-image:projectName', n); } catch {}
   }, []);
+  // Project (complex) name — used at the 'project' plan level where the image
+  // is the master plan of all buildings. Descriptive; persisted locally.
+  const [siteName, setSiteNameState] = useState(() => readLS('interactive-image:siteName', ''));
+  const setSiteName = useCallback((v) => {
+    setSiteNameState(v);
+    try { localStorage.setItem('interactive-image:siteName', v); } catch {}
+  }, []);
+
+  // Building metadata: name + the floor range this one plan/SVG covers (e.g. one
+  // identical layout reused for floors 1–10). Descriptive; persisted locally.
+  const [buildingName, setBuildingNameState] = useState(() => readLS('interactive-image:buildingName', ''));
+  const setBuildingName = useCallback((v) => {
+    setBuildingNameState(v);
+    try { localStorage.setItem('interactive-image:buildingName', v); } catch {}
+  }, []);
+  const [floorFrom, setFloorFromState] = useState(() => readLS('interactive-image:floorFrom', ''));
+  const setFloorFrom = useCallback((v) => {
+    setFloorFromState(v);
+    try { localStorage.setItem('interactive-image:floorFrom', v); } catch {}
+  }, []);
+  const [floorTo, setFloorToState] = useState(() => readLS('interactive-image:floorTo', ''));
+  const setFloorTo = useCallback((v) => {
+    setFloorToState(v);
+    try { localStorage.setItem('interactive-image:floorTo', v); } catch {}
+  }, []);
   const persistProjectId = useCallback((id) => {
     setProjectId(id);
     try { localStorage.setItem('interactive-image:projectId', id); } catch {}
@@ -348,6 +436,12 @@ export default function App() {
   const updateGlow = useCallback((v) => {
     setGlow(v);
     try { localStorage.setItem('interactive-image:glow', String(v)); } catch {}
+  }, []);
+  // Magnifier loupe on the point tools — on by default, toggleable, persisted.
+  const [loupeEnabled, setLoupeEnabledState] = useState(() => readLS('interactive-image:loupe', 'true') !== 'false');
+  const setLoupeEnabled = useCallback((v) => {
+    setLoupeEnabledState(v);
+    try { localStorage.setItem('interactive-image:loupe', v ? 'true' : 'false'); } catch {}
   }, []);
 
   const handleUpload = async (e) => {
@@ -455,11 +549,80 @@ export default function App() {
       height: project.image.height,
       shapes: project.shapes,
       glow,
+      building: {
+        planType,
+        name: planType === 'project' ? siteName : buildingName,
+        floorFrom: planType === 'floor' ? floorFrom : '',
+        floorTo: planType === 'floor' ? floorTo : '',
+      },
     });
-  }, [project.image, project.shapes, glow]);
+  }, [project.image, project.shapes, glow, planType, siteName, buildingName, floorFrom, floorTo]);
 
   // The "Export SVG" header button just switches the sidebar to the Code tab.
   const handleExport = () => setSidebarTab('code');
+
+  // One-click bundle: the interactive SVG, a white-outside clean plan, and one
+  // cropped image per hotspot — all zipped from the same shapes.
+  const handleExportBundle = useCallback(async () => {
+    if (!project.image) return;
+    if (!project.shapes.some((s) => !s.hidden)) {
+      alert('Draw at least one hotspot region first, then download the bundle.');
+      return;
+    }
+    const { url, width, height } = project.image;
+    const levelName = planType === 'project' ? siteName : buildingName;
+    // Auto name: block/building name + floor range, e.g. "Building B Floor 10-20".
+    // The floor range only applies at floor-plan level (Building/Project have none).
+    const floorLabel = () => {
+      const f = String(floorFrom ?? '').trim();
+      const t = String(floorTo ?? '').trim();
+      if (f && t) return f === t ? `Floor ${f}` : `Floor ${f}-${t}`;
+      return f ? `Floor ${f}` : t ? `Floor ${t}` : '';
+    };
+    const autoName = ([
+      (levelName || projectName || 'plan').trim(),
+      planType === 'floor' ? floorLabel() : '',
+    ].filter(Boolean).join(' ').trim() || 'plan').replace(/[\\/:*?"<>|]/g, '_');
+    try {
+      await downloadBundle({
+        imageUrl: url, imageW: width, imageH: height,
+        shapes: project.shapes, glow,
+        building: {
+          planType,
+          name: levelName,
+          floorFrom: planType === 'floor' ? floorFrom : '',
+          floorTo: planType === 'floor' ? floorTo : '',
+        },
+        // Floor plan comes from the Blur workspace's floor-area selection.
+        floorShapes: project.blurs.shapes,
+        floorOutside: blurOutside, floorFillColor: blurFillColor,
+        floorAmount: blurAmount, floorStroke: blurStroke, floorStrokeColor: blurStrokeColor,
+        format: 'png', scale: 1, mask: true, bg: 'white',
+        // The white margin is a floor-plan thing (framing each apartment). A
+        // Building/Project bundle crops its hotspots tight, no padding.
+        roomPadding: planType === 'floor' ? 140 : 0,
+        namePrefix: autoName,
+        zipName: autoName + '.zip',
+      });
+    } catch (err) {
+      alert('Could not build the bundle: ' + err.message);
+    }
+  }, [project.image, project.shapes, project.blurs.shapes, glow, projectName, planType, siteName, buildingName, floorFrom, floorTo,
+      blurOutside, blurFillColor, blurAmount, blurStroke, blurStrokeColor]);
+
+  // Grow (delta>0) / shrink (delta<0) a finished hotspot's outline by delta px —
+  // e.g. nudge a unit outward onto the walls. One-shot per click, so it never
+  // compounds the way per-click wand grow did.
+  const handleGrowShape = useCallback((id, delta) => {
+    if (!project.image) return;
+    const { width, height } = project.image;
+    const shape = project.shapes.find((s) => s.id === id);
+    if (!shape) return;
+    const points = growShapeMask(shape, width, height, delta);
+    if (!points || points.length < 3) return;
+    project.pushHistory(project.shapes);
+    project.setShapesLive((arr) => arr.map((s) => (s.id === id ? { ...s, type: 'polygon', points, curves: undefined } : s)));
+  }, [project]);
 
   // ---- Reusable layouts (hotspots + pieces + blurs, without the image) ----
   const handleSaveLayout = useCallback(() => {
@@ -535,7 +698,7 @@ export default function App() {
   const handleExportPieces = useCallback(async (list, delivery) => {
     if (!project.image || !list.length) return;
     const { url, width, height } = project.image;
-    const opts = { mask: pieceMask, padding: piecePadding, scale: pieceScale, format: pieceFormat };
+    const opts = { mask: pieceMask, padding: piecePadding, scale: pieceScale, format: pieceFormat, bg: pieceBg };
     try {
       if (delivery === 'zip') {
         await downloadPiecesAsZip(url, list, width, height, { ...opts, zipName: 'pieces.zip' });
@@ -545,7 +708,7 @@ export default function App() {
     } catch (err) {
       alert('Could not export pieces: ' + err.message);
     }
-  }, [project.image, pieceMask, piecePadding, pieceScale, pieceFormat]);
+  }, [project.image, pieceMask, piecePadding, pieceScale, pieceFormat, pieceBg]);
 
   // Auto-cut the whole image into a cols × rows grid of rectangular pieces.
   const handleGridSlice = useCallback((cols, rows) => {
@@ -705,6 +868,7 @@ export default function App() {
               blurStrokeColor={blurStrokeColor}
               blurOutside={blurOutside}
               blurFillColor={blurFillColor}
+              loupeEnabled={loupeEnabled}
             />
           )}
 
@@ -715,6 +879,42 @@ export default function App() {
                 className="flex items-center gap-1.5 px-3 h-9 rounded-md bg-[#1a1a1d]/95 backdrop-blur border border-[#26262a] text-[13px] text-[#c4c4c8] shadow-xl hover:border-red-500/60 hover:text-red-400 transition-colors"
               >
                 <Trash2 size={14} /> Delete image
+              </button>
+            </div>
+          )}
+
+          {hasImage && drawing.tool === 'wand' && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2.5 px-3 h-9 rounded-md bg-[#1a1a1d]/95 backdrop-blur border border-[#26262a] shadow-xl">
+              <Wand2 size={13} className="text-[#c4c4c8]" />
+              <span className="text-[11px] text-[#9a9aa0]">Tolerance</span>
+              <input
+                type="range"
+                min={1} max={120} step={1}
+                value={wandTolerance}
+                onChange={(e) => setWandTolerance(Number(e.target.value))}
+                className="w-24 accent-violet-500 cursor-pointer"
+              />
+              <span className="text-[10px] font-mono text-[#9a9aa0] w-6 text-right tabular-nums">
+                {Math.round(wandTolerance)}
+              </span>
+              <span className="text-[10px] text-[#6a6a70] border-l border-[#333] pl-2.5">
+                Shift-click to add a room · then Grow it in the panel
+              </span>
+            </div>
+          )}
+
+          {hasImage && (drawing.tool === 'polygon' || drawing.tool === 'polyline') && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10">
+              <button
+                onClick={() => setLoupeEnabled(!loupeEnabled)}
+                title="Magnifier loupe — zoom the spot under the cursor while placing points"
+                className={`flex items-center gap-1.5 px-3 h-9 rounded-md backdrop-blur border text-[13px] shadow-xl transition-colors ${
+                  loupeEnabled
+                    ? 'bg-violet-500/20 border-violet-500/50 text-violet-200 hover:bg-violet-500/30'
+                    : 'bg-[#1a1a1d]/95 border-[#26262a] text-[#c4c4c8] hover:border-[#3a3a3e] hover:text-white'
+                }`}
+              >
+                <ZoomIn size={14} /> Magnifier {loupeEnabled ? 'On' : 'Off'}
               </button>
             </div>
           )}
@@ -743,6 +943,8 @@ export default function App() {
             onClearAll={handleClearPieces}
             mask={pieceMask}
             onMaskChange={setPieceMask}
+            bg={pieceBg}
+            onBgChange={setPieceBg}
             padding={piecePadding}
             onPaddingChange={setPiecePadding}
             scale={pieceScale}
@@ -811,6 +1013,21 @@ export default function App() {
             exportText={exportText}
             onApplyCode={applySvgText}
             canExport={canExport}
+            onExportBundle={handleExportBundle}
+            onGrow={handleGrowShape}
+            planType={planType}
+            onPlanTypeChange={setPlanType}
+            siteName={siteName}
+            onSiteNameChange={setSiteName}
+            buildingName={buildingName}
+            onBuildingNameChange={setBuildingName}
+            floorFrom={floorFrom}
+            onFloorFromChange={setFloorFrom}
+            floorTo={floorTo}
+            onFloorToChange={setFloorTo}
+            categories={activeCategories}
+            category={hotspotCategory}
+            onCategoryChange={setHotspotCategory}
             width={sidebarWidth}
             onWidthChange={updateSidebarWidth}
             onClear={handleClear}

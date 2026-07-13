@@ -1,4 +1,6 @@
 import SpotlightMask from './SpotlightMask.jsx';
+import { statusOf } from '../../lib/status.js';
+import { hasCurves, polygonPathD } from '../../lib/pathGeom.js';
 
 // Renders a single shape on the editor canvas.
 //
@@ -23,25 +25,34 @@ export default function ShapeRender({ shape, isSelected, isHovered, mode, onHove
   // image shows through.
   const isCut = shape.role === 'cut';
   const isBlur = shape.role === 'blur';
+  // A sales status colors the hotspot (green/amber/red) both while editing and
+  // in preview, so availability reads at a glance and matches the exported SVG.
+  const status = (!isCut && !isBlur) ? statusOf(shape) : null;
 
   const editFill = isCut
     ? (isHovered ? 'rgba(16, 185, 129, 0.22)' : 'rgba(16, 185, 129, 0.14)')
     : isBlur
       ? (isHovered ? 'rgba(56, 189, 248, 0.16)' : 'rgba(56, 189, 248, 0.08)')
-      : shape.hover === 'fill'
-        ? (shape.fill || '#c4c4c4')
-        : (isHovered ? 'rgba(168, 85, 247, 0.18)' : 'rgba(99, 102, 241, 0.12)');
+      : status
+        ? (isHovered ? status.hoverFill : status.fill)
+        : shape.hover === 'fill'
+          ? (shape.fill || '#c4c4c4')
+          : (isHovered ? 'rgba(168, 85, 247, 0.18)' : 'rgba(99, 102, 241, 0.12)');
 
-  const previewFill = shape.hover === 'fill'
-    ? (isHovered ? (shape.hoverFill || '#d8d8d8') : (shape.fill || '#c4c4c4'))
-    : 'transparent';
+  const previewFill = status
+    ? (isHovered ? status.hoverFill : status.fill)
+    : shape.hover === 'fill'
+      ? (isHovered ? (shape.hoverFill || '#d8d8d8') : (shape.fill || '#c4c4c4'))
+      : 'transparent';
 
   const fill = mode === 'edit' ? editFill : previewFill;
   const editStroke = isCut
     ? (isSelected ? '#34d399' : isHovered ? '#6ee7b7' : '#10b981')
     : isBlur
       ? (isSelected ? '#38bdf8' : isHovered ? '#7dd3fc' : '#0ea5e9')
-      : (isSelected ? '#a855f7' : isHovered ? '#c084fc' : '#6366f1');
+      : status
+        ? status.color
+        : (isSelected ? '#a855f7' : isHovered ? '#c084fc' : '#6366f1');
   const baseSW = isSelected ? 3 : 2;
 
   // Preview-mode hover effect — mirrors the exported CSS. A thin static
@@ -86,14 +97,35 @@ export default function ShapeRender({ shape, isSelected, isHovered, mode, onHove
         <ellipse {...common} cx={shape.cx} cy={shape.cy} rx={shape.rx} ry={shape.ry} />
       )}
       {shape.type === 'polygon' && (
-        <polygon {...common} points={shape.points.map((p) => p.join(',')).join(' ')} />
+        hasCurves(shape)
+          ? <path {...common} d={polygonPathD(shape.points, shape.curves, true)} />
+          : <polygon {...common} points={shape.points.map((p) => p.join(',')).join(' ')} />
       )}
       {/* In Cut/Blur a polyline marks a region, so render it closed + filled
           like a polygon. In Hotspots it stays an open, unfilled line. */}
       {shape.type === 'polyline' && (isCut || isBlur) && (
-        <polygon {...common} points={shape.points.map((p) => p.join(',')).join(' ')} />
+        hasCurves(shape)
+          ? <path {...common} d={polygonPathD(shape.points, shape.curves, true)} />
+          : <polygon {...common} points={shape.points.map((p) => p.join(',')).join(' ')} />
       )}
       {shape.type === 'polyline' && !isCut && !isBlur && (
+        hasCurves(shape) ? (
+        <path
+          {...common}
+          d={polygonPathD(shape.points, shape.curves, false)}
+          fill="none"
+          stroke={
+            showHoverGlow ? glowProps.stroke
+            : mode === 'edit' ? editStroke
+            : (shape.fill || '#c4c4c4')
+          }
+          strokeWidth={
+            showHoverGlow ? glowProps.strokeWidth
+            : mode === 'edit' ? (isSelected ? 4 : 3) / displayScale
+            : 3 / displayScale
+          }
+        />
+        ) : (
         <polyline
           {...common}
           points={shape.points.map((p) => p.join(',')).join(' ')}
@@ -109,6 +141,7 @@ export default function ShapeRender({ shape, isSelected, isHovered, mode, onHove
             : 3 / displayScale
           }
         />
+        )
       )}
     </g>
   );

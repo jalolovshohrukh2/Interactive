@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import ShapeRender from './ShapeRender.jsx';
 import DraftRender from './DraftRender.jsx';
 import SelectionHandles from './SelectionHandles.jsx';
@@ -6,6 +6,7 @@ import Guides from './Guides.jsx';
 import ZoomControls from './ZoomControls.jsx';
 import Marquee from './Marquee.jsx';
 import { bbox } from '../../lib/snap.js';
+import { hasCurves, polygonPathD } from '../../lib/pathGeom.js';
 
 // Single SVG fills the viewport. Image + shapes live inside a <g> with a
 // translate+scale transform driven by the viewport hook. That means:
@@ -22,6 +23,7 @@ export default function Canvas({
   viewport, glow = 0.4, showNames = false, imageSelected = false,
   blurMode = false, blurAmount = 0, blurStroke = 0, blurStrokeColor = '#38bdf8',
   blurOutside = 'blur', blurFillColor = '#ffffff',
+  loupeEnabled = true,
 }) {
   const {
     viewportRef, viewportSize, baseX, baseY, pan, displayScale,
@@ -56,6 +58,67 @@ export default function Canvas({
   const focusShapes = blurMode ? visibleShapes : [];
   const cursorStyle =
     mode === 'preview' ? 'default' : tool === 'select' ? 'default' : 'crosshair';
+
+  // Magnifier loupe for the point tools — lets you click a precise spot without
+  // zooming the whole canvas. It's driven imperatively off a rAF-throttled
+  // mousemove listener (see the effect below) instead of React state, so it
+  // tracks the cursor at 60fps without re-rendering the whole canvas each move.
+  const loupeRef = useRef(null);
+  const loupeStateRef = useRef({});
+  loupeStateRef.current = {
+    active: loupeEnabled && mode === 'edit' && (tool === 'polygon' || tool === 'polyline') && !!image,
+    baseX, baseY, panX: pan.x, panY: pan.y, displayScale,
+    imageW: image ? image.width : 0,
+    imageH: image ? image.height : 0,
+  };
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    const loupe = loupeRef.current;
+    if (!el || !loupe) return;
+    const R = 78, GAP = 18;
+    let raf = 0;
+    let last = null;
+    const hide = () => { loupe.style.display = 'none'; };
+    const apply = () => {
+      raf = 0;
+      const st = loupeStateRef.current;
+      const e = last;
+      if (!st.active || !e || !st.displayScale) return hide();
+      const rect = el.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      if (mx < 0 || my < 0 || mx > rect.width || my > rect.height) return hide();
+      const cx = (mx - st.baseX - st.panX) / st.displayScale;
+      const cy = (my - st.baseY - st.panY) / st.displayScale;
+      // Magnify 2.5x over the current zoom, never below 1.5x native.
+      const S = Math.max(st.displayScale * 2.5, 1.5);
+      let ly = my - (R + GAP);
+      if (ly - R < 6) ly = my + (R + GAP);
+      ly = Math.max(R + 6, Math.min(rect.height - R - 6, ly));
+      const lx = Math.max(R + 6, Math.min(rect.width - R - 6, mx));
+      loupe.style.display = 'block';
+      loupe.style.left = (lx - R) + 'px';
+      loupe.style.top = (ly - R) + 'px';
+      loupe.style.backgroundSize = (st.imageW * S) + 'px ' + (st.imageH * S) + 'px';
+      loupe.style.backgroundPosition = (R - cx * S) + 'px ' + (R - cy * S) + 'px';
+    };
+    const onMove = (e) => { last = e; if (!raf) raf = requestAnimationFrame(apply); };
+    const onLeave = () => { last = null; hide(); };
+    el.addEventListener('mousemove', onMove);
+    el.addEventListener('mouseleave', onLeave);
+    return () => {
+      el.removeEventListener('mousemove', onMove);
+      el.removeEventListener('mouseleave', onLeave);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [viewportRef]);
+
+  // Hide the loupe right away when it's turned off or the tool changes, rather
+  // than waiting for the next mouse move.
+  useEffect(() => {
+    if (loupeRef.current && !loupeStateRef.current.active) loupeRef.current.style.display = 'none';
+  }, [loupeEnabled, tool, mode]);
 
   return (
     <div
@@ -251,6 +314,29 @@ export default function Canvas({
           />
         </g>
       </svg>
+      {/* Magnifier loupe — a CSS layer updated imperatively for smoothness.
+          Only static styles live here; position + zoom are set in the effect. */}
+      <div
+        ref={loupeRef}
+        style={{
+          position: 'absolute',
+          display: 'none',
+          width: 156,
+          height: 156,
+          borderRadius: '50%',
+          border: '2px solid #a855f7',
+          boxShadow: '0 0 0 1px rgba(0,0,0,0.55), 0 6px 18px rgba(0,0,0,0.5)',
+          backgroundColor: '#0f0f10',
+          backgroundImage: `url("${image.url}")`,
+          backgroundRepeat: 'no-repeat',
+          overflow: 'hidden',
+          pointerEvents: 'none',
+          zIndex: 5,
+        }}
+      >
+        <div style={{ position: 'absolute', left: '50%', top: '50%', width: 1.5, height: 24, background: '#a855f7', boxShadow: '0 0 1px rgba(0,0,0,0.9)', transform: 'translate(-50%,-50%)' }} />
+        <div style={{ position: 'absolute', left: '50%', top: '50%', width: 24, height: 1.5, background: '#a855f7', boxShadow: '0 0 1px rgba(0,0,0,0.9)', transform: 'translate(-50%,-50%)' }} />
+      </div>
       <ZoomControls
         zoom={zoom}
         onZoomIn={zoomIn}
@@ -272,7 +358,9 @@ function ClipShape({ shape }) {
       return <ellipse cx={shape.cx} cy={shape.cy} rx={shape.rx} ry={shape.ry} />;
     case 'polygon':
     case 'polyline':
-      return <polygon points={(shape.points || []).map((p) => p.join(',')).join(' ')} />;
+      return hasCurves(shape)
+        ? <path d={polygonPathD(shape.points, shape.curves, true)} />
+        : <polygon points={(shape.points || []).map((p) => p.join(',')).join(' ')} />;
     default:
       return null;
   }

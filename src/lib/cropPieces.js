@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { bbox } from './snap.js';
+import { tracePolygonPath } from './pathGeom.js';
 
 // Crop the background image down to a set of "piece" shapes and hand them back
 // as PNGs — either downloaded individually or bundled into a ZIP.
@@ -36,9 +37,8 @@ function tracePath(ctx, shape, offX, offY) {
     case 'polyline': {
       const pts = shape.points || [];
       if (!pts.length) break;
-      ctx.moveTo(pts[0][0] + offX, pts[0][1] + offY);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0] + offX, pts[i][1] + offY);
-      ctx.closePath();
+      // Handles both straight and per-edge-curved outlines.
+      tracePolygonPath(ctx, pts, shape.curves, true, offX, offY);
       break;
     }
     default:
@@ -48,17 +48,21 @@ function tracePath(ctx, shape, offX, offY) {
 
 // Render one piece to an offscreen canvas. Returns null if the region has no area.
 //   mask     – clip to the exact outline (transparent outside); off = rect crop
-//   padding  – extra px around the bounding box (clamped to the image)
+//   padding  – extra px of margin around the bounding box on every side; may
+//              extend past the image edges (that overhang is pure background)
 //   scale    – output resolution multiplier (e.g. 2 for crisp 2× exports)
-//   jpeg     – fill an opaque white background (JPEG has no alpha)
-export function cropPieceToCanvas(img, shape, imageW, imageH, { mask = true, padding = 0, scale = 1, jpeg = false } = {}) {
+//   bg       – 'white' fills an opaque white background around the piece;
+//              'transparent' (default) leaves the outside alpha-transparent
+//   jpeg     – JPEG has no alpha, so it always gets a white background
+export function cropPieceToCanvas(img, shape, imageW, imageH, { mask = true, padding = 0, scale = 1, jpeg = false, bg = 'transparent' } = {}) {
   const b = bbox(shape);
-  const x0 = Math.max(0, Math.floor(b.x - padding));
-  const y0 = Math.max(0, Math.floor(b.y - padding));
-  const x1 = Math.min(imageW, Math.ceil(b.x + b.w + padding));
-  const y1 = Math.min(imageH, Math.ceil(b.y + b.h + padding));
-  const w = x1 - x0;
-  const h = y1 - y0;
+  // The output box is the padded bounding box. Unlike the source crop, it is NOT
+  // clamped to the image — padding always adds a full margin on every side, even
+  // when the piece runs to the image edge.
+  const boxX = Math.floor(b.x - padding);
+  const boxY = Math.floor(b.y - padding);
+  const w = Math.ceil(b.x + b.w + padding) - boxX;
+  const h = Math.ceil(b.y + b.h + padding) - boxY;
   if (w < 1 || h < 1) return null;
 
   const canvas = document.createElement('canvas');
@@ -67,13 +71,19 @@ export function cropPieceToCanvas(img, shape, imageW, imageH, { mask = true, pad
   const ctx = canvas.getContext('2d');
   if (scale !== 1) ctx.scale(scale, scale);
 
-  if (jpeg) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); }
+  if (jpeg || bg === 'white') { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); }
   if (mask) {
     ctx.save();
-    tracePath(ctx, shape, -x0, -y0);
+    tracePath(ctx, shape, -boxX, -boxY);
     ctx.clip();
   }
-  ctx.drawImage(img, x0, y0, w, h, 0, 0, w, h);
+  // Draw only the part of the box that overlaps the source image; the rest of the
+  // box (any padding beyond the image edge) stays background.
+  const sx = Math.max(0, boxX);
+  const sy = Math.max(0, boxY);
+  const sw = Math.min(imageW, boxX + w) - sx;
+  const sh = Math.min(imageH, boxY + h) - sy;
+  if (sw > 0 && sh > 0) ctx.drawImage(img, sx, sy, sw, sh, sx - boxX, sy - boxY, sw, sh);
   if (mask) ctx.restore();
 
   return canvas;

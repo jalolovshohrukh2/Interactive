@@ -1,4 +1,4 @@
-import { MousePointer2, Square, Hexagon, Spline, Circle, Lasso, Target, Scissors, Droplet } from 'lucide-react';
+import { MousePointer2, Square, Hexagon, Spline, Circle, Lasso, Wand2, Target, Scissors, Droplet } from 'lucide-react';
 
 export const STORAGE_KEY = 'interactive-image:project';
 
@@ -9,6 +9,7 @@ export const TOOLS = [
   { id: 'polyline', label: 'Polyline',  Icon: Spline,        shortcut: 'L', hint: 'L — click points, Enter to finish' },
   { id: 'ellipse',  label: 'Ellipse',   Icon: Circle,        shortcut: 'E', hint: 'E — drag bounding box' },
   { id: 'lasso',    label: 'Freehand',  Icon: Lasso,         shortcut: 'F', hint: 'F — hold and drag to trace a curved area, release to close' },
+  { id: 'wand',     label: 'Magic wand', Icon: Wand2,        shortcut: 'W', hint: 'W — click a colored area to select it automatically' },
 ];
 
 export const TOOL_SHORTCUTS = Object.fromEntries(
@@ -31,6 +32,7 @@ export const CUT_TOOLS = [
   { id: 'polyline', label: 'Polyline',  Icon: Spline,        shortcut: 'L', hint: 'L — click points, Enter to finish' },
   { id: 'ellipse',  label: 'Ellipse',   Icon: Circle,        shortcut: 'E', hint: 'E — drag bounding box' },
   { id: 'lasso',    label: 'Freehand',  Icon: Lasso,         shortcut: 'F', hint: 'F — hold and drag to trace a curved area, release to close' },
+  { id: 'wand',     label: 'Magic wand', Icon: Wand2,        shortcut: 'W', hint: 'W — click a colored area to select it automatically' },
 ];
 
 export const CUT_TOOL_SHORTCUTS = Object.fromEntries(
@@ -46,6 +48,7 @@ export const BLUR_TOOLS = [
   { id: 'polyline', label: 'Polyline',  Icon: Spline,        shortcut: 'L', hint: 'L — click points, Enter to finish' },
   { id: 'ellipse',  label: 'Ellipse',   Icon: Circle,        shortcut: 'E', hint: 'E — drag bounding box' },
   { id: 'lasso',    label: 'Freehand',  Icon: Lasso,         shortcut: 'F', hint: 'F — hold and drag to trace a curved area, release to close' },
+  { id: 'wand',     label: 'Magic wand', Icon: Wand2,        shortcut: 'W', hint: 'W — click a colored area to select it automatically' },
 ];
 
 export const BLUR_TOOL_SHORTCUTS = Object.fromEntries(
@@ -55,6 +58,41 @@ export const BLUR_TOOL_SHORTCUTS = Object.fromEntries(
 export const DEFAULT_PIECE_PREFIX = 'piece';
 export const DEFAULT_FOCUS_PREFIX = 'focus';
 export const DEFAULT_BLUR_AMOUNT = 12;
+
+// Hotspot categories. The picked category decides how a newly drawn hotspot is
+// named — Apartment → "Apt 1", Store → "Store 1", Parking → "Parking 1" — each
+// numbered independently.
+export const HOTSPOT_CATEGORIES = [
+  { id: 'apartment', label: 'Apartment', prefix: 'Apt' },
+  { id: 'store',     label: 'Store',     prefix: 'Store' },
+  { id: 'parking',   label: 'Parking',   prefix: 'Parking' },
+];
+export const DEFAULT_HOTSPOT_CATEGORY = 'apartment';
+
+// What this document represents in the master-plan → building → floor flow.
+// The level decides what a new hotspot means (and how it's auto-named):
+//   project  → the whole complex; hotspots are buildings  → "Building 1, 2…"
+//   building → one building;      hotspots are floors     → "Floor 1, 2…"
+//   floor    → one floor plan;    hotspots are units      → Apt/Store/Parking
+export const PLAN_TYPES = [
+  { id: 'project',  label: 'Project',    hint: 'Master plan — draw a hotspot over each building.' },
+  { id: 'building', label: 'Building',   hint: 'One building — draw a hotspot over each floor.' },
+  { id: 'floor',    label: 'Floor plan', hint: 'One floor — draw apartments, stores, parking.' },
+];
+export const DEFAULT_PLAN_TYPE = 'floor';
+export const PROJECT_PLAN_CATEGORIES = [
+  { id: 'building', label: 'Building', prefix: 'Building' },
+];
+export const BUILDING_PLAN_CATEGORIES = [
+  { id: 'floor', label: 'Floor', prefix: 'Floor' },
+];
+
+// Sales statuses live in a lucide-free module so the pure SVG exporter can use
+// them; re-exported here for the UI's convenience.
+export { UNIT_STATUSES, UNIT_STATUS_BY_ID, statusOf } from './lib/status.js';
+
+// Magic-wand color tolerance (max RGB distance from the clicked pixel, 1–120).
+export const DEFAULT_WAND_TOLERANCE = 32;
 
 // Blur workspace "Outside" treatment — what happens to everything OUTSIDE the
 // focus regions: blur it, fill it with a solid color, or make it transparent.

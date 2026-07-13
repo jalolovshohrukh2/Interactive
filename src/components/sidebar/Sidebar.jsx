@@ -1,12 +1,16 @@
 import { useState } from 'react';
-import { Trash2, Copy, Layers, Code2 } from 'lucide-react';
+import { Trash2, Copy, Layers, Code2, Package, Maximize2 } from 'lucide-react';
 import ShapeRow from './ShapeRow.jsx';
 import DetailPanel from './DetailPanel.jsx';
 import CodePanel from './CodePanel.jsx';
+import BuildingInfo from './BuildingInfo.jsx';
 import ResizableAside from './ResizableAside.jsx';
 import LayoutControls from './LayoutControls.jsx';
+import ShapesModal from './ShapesModal.jsx';
 import Slider from '../ui/Slider.jsx';
 import Label from '../ui/Label.jsx';
+import Collapsible from '../ui/Collapsible.jsx';
+import { PLAN_TYPES } from '../../constants.js';
 
 // Right-side panel.
 //
@@ -18,9 +22,16 @@ import Label from '../ui/Label.jsx';
 export default function Sidebar({
   shapes, selectedIds,
   onSelect, onDelete, onUpdate, onClear,
-  onDeleteSelected, onDuplicateSelected, onReorder, onMoveShape,
+  onDeleteSelected, onDuplicateSelected, onReorder, onMoveShape, onGrow,
   glow, onGlowChange,
   tab, onTabChange, exportText, onApplyCode, canExport,
+  onExportBundle,
+  planType = 'floor', onPlanTypeChange,
+  siteName, onSiteNameChange,
+  buildingName, onBuildingNameChange,
+  floorFrom, onFloorFromChange,
+  floorTo, onFloorToChange,
+  categories = [], category, onCategoryChange,
   width, onWidthChange,
   onSaveLayout, onLoadLayout,
   hasImage,
@@ -28,9 +39,88 @@ export default function Sidebar({
   const selectedSet = new Set(selectedIds);
   const onlyOne = selectedIds.length === 1 ? shapes.find((s) => s.id === selectedIds[0]) : null;
   const multiCount = selectedIds.length > 1 ? selectedIds.length : 0;
+  const [bundleBusy, setBundleBusy] = useState(false);
+  const [viewAll, setViewAll] = useState(false);
+
+  // One-line recap of the setup fields, shown when the Setup section is collapsed.
+  const planLabel = (PLAN_TYPES.find((p) => p.id === planType) || PLAN_TYPES[2]).label;
+  const nameBit = planType === 'project' ? siteName : buildingName;
+  const setupSummary = [
+    planLabel,
+    nameBit || null,
+    planType === 'floor' ? `floors ${floorFrom || 1}–${floorTo || 10}` : null,
+  ].filter(Boolean).join(' · ');
+
+  const runBundle = async () => {
+    if (bundleBusy || !onExportBundle) return;
+    setBundleBusy(true);
+    try { await onExportBundle(); }
+    finally { setBundleBusy(false); }
+  };
 
   return (
     <ResizableAside width={width} onWidthChange={onWidthChange}>
+      {/* What this document is: master plan / one building / one floor. Drives
+          hotspot naming and which metadata fields make sense. Tucked into a
+          collapsible so this set-once config doesn't crowd out the shape list. */}
+      <Collapsible title="Setup" summary={setupSummary} defaultOpen={false}>
+        <div className="px-3 pt-3 pb-3 border-b border-[#1f1f22]">
+          <Label>Plan level</Label>
+          <div className="mt-1 flex rounded-md border border-[#26262a] overflow-hidden">
+            {PLAN_TYPES.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => onPlanTypeChange?.(p.id)}
+                className={`flex-1 h-7 text-[11px] font-medium transition-colors ${
+                  planType === p.id ? 'bg-[#26262a] text-white' : 'text-[#8a8a90] hover:text-white'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="text-[10px] text-[#5a5a60] mt-1.5 leading-snug">
+            {(PLAN_TYPES.find((p) => p.id === planType) || PLAN_TYPES[2]).hint}
+          </div>
+        </div>
+
+        <BuildingInfo
+          planType={planType}
+          siteName={siteName}
+          onSiteNameChange={onSiteNameChange}
+          buildingName={buildingName}
+          onBuildingNameChange={onBuildingNameChange}
+          floorFrom={floorFrom}
+          onFloorFromChange={onFloorFromChange}
+          floorTo={floorTo}
+          onFloorToChange={onFloorToChange}
+        />
+
+        {categories.length > 1 ? (
+          <div className="px-3 pt-3 pb-3">
+            <Label>New hotspot type</Label>
+            <select
+              value={category}
+              onChange={(e) => onCategoryChange(e.target.value)}
+              className="w-full mt-1 bg-[#0a0a0c] border border-[#26262a] rounded-md px-2.5 h-8 text-[12px] text-white outline-none focus:border-violet-500/60 transition-colors cursor-pointer"
+            >
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.label}</option>
+              ))}
+            </select>
+            <div className="text-[10px] text-[#5a5a60] mt-1">
+              New shapes are named {(categories.find((c) => c.id === category) || categories[0]).prefix} 1, 2, 3…
+            </div>
+          </div>
+        ) : categories.length === 1 ? (
+          <div className="px-3 pt-3 pb-3">
+            <div className="text-[10px] text-[#5a5a60] leading-snug">
+              New shapes are named <span className="text-[#c4c4c8]">{categories[0].prefix} 1, 2, 3…</span> — rename them in the detail panel.
+            </div>
+          </div>
+        ) : null}
+      </Collapsible>
+
       <div className="px-3 pt-3 pb-2 flex-shrink-0">
         <SegmentedTabs
           tab={tab}
@@ -50,6 +140,8 @@ export default function Sidebar({
           onMoveShape={onMoveShape}
           onDeleteSelected={onDeleteSelected}
           onDuplicateSelected={onDuplicateSelected}
+          onGrow={onGrow}
+          onViewAll={() => setViewAll(true)}
           onlyOne={onlyOne}
           multiCount={multiCount}
           hasImage={hasImage}
@@ -58,28 +150,55 @@ export default function Sidebar({
         <CodePanel text={exportText} onApply={onApplyCode} />
       )}
 
-      <div className="border-t border-[#1f1f22] flex-shrink-0 p-4">
-        <Label>Hover outline</Label>
-        <Slider
-          value={glow ?? 0.4}
-          min={0} max={1} step={0.05}
-          onChange={(v) => onGlowChange?.(v)}
-        />
-      </div>
-
-      <div className="border-t border-[#1f1f22] p-3 flex-shrink-0">
-        <LayoutControls onSave={onSaveLayout} onLoad={onLoadLayout} />
-      </div>
-
-      {hasImage && (
+      {/* Primary action stays pinned + visible. */}
+      {hasImage && shapes.length > 0 && (
         <div className="border-t border-[#1f1f22] p-3 flex-shrink-0">
           <button
-            onClick={onClear}
-            className="w-full text-[11px] text-[#6a6a70] py-1.5 rounded border border-dashed border-[#26262a] hover:text-red-400 hover:border-red-500/50 transition-colors"
+            onClick={runBundle}
+            disabled={bundleBusy}
+            className="w-full flex items-center justify-center gap-2 h-9 rounded-md bg-violet-500 text-white text-[12.5px] font-semibold hover:bg-violet-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Reset project
+            <Package size={13} strokeWidth={2.5} />
+            {bundleBusy ? 'Packaging…' : 'Download bundle (.zip)'}
           </button>
         </div>
+      )}
+
+      {/* Occasional controls tucked away so they don't squeeze the list. */}
+      <Collapsible title="Display & project" defaultOpen={false}>
+        <div className="p-3 space-y-3">
+          <div>
+            <Label>Hover outline</Label>
+            <Slider
+              value={glow ?? 0.4}
+              min={0} max={1} step={0.05}
+              onChange={(v) => onGlowChange?.(v)}
+            />
+          </div>
+          <div className="text-[10px] text-[#5a5a60] leading-snug">
+            Bundle = interactive SVG + a room image per apartment, plus the clean floor plan from the Blur tab.
+          </div>
+          <LayoutControls onSave={onSaveLayout} onLoad={onLoadLayout} />
+          {hasImage && (
+            <button
+              onClick={onClear}
+              className="w-full text-[11px] text-[#6a6a70] py-1.5 rounded border border-dashed border-[#26262a] hover:text-red-400 hover:border-red-500/50 transition-colors"
+            >
+              Reset project
+            </button>
+          )}
+        </div>
+      </Collapsible>
+
+      {viewAll && (
+        <ShapesModal
+          shapes={shapes}
+          selectedSet={selectedSet}
+          onSelect={onSelect}
+          onDelete={onDelete}
+          onUpdate={onUpdate}
+          onClose={() => setViewAll(false)}
+        />
       )}
     </ResizableAside>
   );
@@ -141,19 +260,38 @@ function Seg({ active, onClick, Icon, label, count }) {
 
 function ShapesTab({
   shapes, selectedSet, onSelect, onDelete, onUpdate, onReorder, onMoveShape,
-  onDeleteSelected, onDuplicateSelected, onlyOne, multiCount, hasImage,
+  onDeleteSelected, onDuplicateSelected, onGrow, onViewAll, onlyOne, multiCount, hasImage,
 }) {
   return (
-    <>
-      <ShapeList
-        shapes={shapes}
-        selectedSet={selectedSet}
-        onSelect={onSelect}
-        onDelete={onDelete}
-        onUpdate={onUpdate}
-        onMoveShape={onMoveShape}
-        hasImage={hasImage}
-      />
+    <div className="flex-1 min-h-0 flex flex-col">
+      {/* Pinned header: count + a full-height "View all" escape hatch, so the
+          whole list is reachable even when the inline area is short. */}
+      {shapes.length > 0 && (
+        <div className="flex items-center justify-between px-3 h-8 flex-shrink-0 border-b border-[#1f1f22]">
+          <span className="text-[10px] uppercase tracking-wider text-[#6a6a70] font-medium">
+            {shapes.length} {shapes.length === 1 ? 'shape' : 'shapes'}
+          </span>
+          <button
+            onClick={onViewAll}
+            className="flex items-center gap-1 text-[11px] text-[#8a8a90] hover:text-white transition-colors"
+          >
+            <Maximize2 size={11} /> View all
+          </button>
+        </div>
+      )}
+
+      {/* The list and the detail panel share ONE scroll region so a tall detail
+          panel (status, price, grow, arrange…) can't push itself past the viewport. */}
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+        <ShapeList
+          shapes={shapes}
+          selectedSet={selectedSet}
+          onSelect={onSelect}
+          onDelete={onDelete}
+          onUpdate={onUpdate}
+          onMoveShape={onMoveShape}
+          hasImage={hasImage}
+        />
 
       {onlyOne && (
         <div className="border-t border-[#1f1f22] flex-shrink-0">
@@ -161,6 +299,7 @@ function ShapesTab({
             shape={onlyOne}
             onUpdate={(patch) => onUpdate(onlyOne.id, patch)}
             onReorder={(action) => onReorder?.(onlyOne.id, action)}
+            onGrow={(delta) => onGrow?.(onlyOne.id, delta)}
           />
         </div>
       )}
@@ -186,7 +325,8 @@ function ShapesTab({
           </div>
         </div>
       )}
-    </>
+      </div>
+    </div>
   );
 }
 
@@ -236,8 +376,8 @@ function ShapeList({ shapes, selectedSet, onSelect, onDelete, onUpdate, onMoveSh
   };
 
   return (
-    <div className="flex flex-col min-h-0 flex-1">
-      <div className="overflow-y-auto flex-1 min-h-0">
+    <div className="flex flex-col">
+      <div>
         {!shapes.length ? (
           <div className="px-4 py-8 text-center text-[12px] text-[#5a5a60]">
             {hasImage ? 'Pick a tool and start drawing' : 'Upload an image to begin'}

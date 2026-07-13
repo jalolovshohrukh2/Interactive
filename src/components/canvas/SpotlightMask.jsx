@@ -1,3 +1,5 @@
+import { polygonPathD } from '../../lib/pathGeom.js';
+
 // Renders a viewport-filling black overlay with the given shape punched out.
 // Used in preview mode for shapes that use the "spotlight" hover pattern.
 // Relies on fill-rule="evenodd" so winding order doesn't matter.
@@ -17,14 +19,12 @@ export default function SpotlightMask({ shape }) {
 
 function innerSubpath(s) {
   switch (s.type) {
-    case 'polygon': {
-      if (!s.points.length) return '';
-      const [x0, y0] = s.points[0];
-      return (
-        `M${x0},${y0}` +
-        s.points.slice(1).map(([x, y]) => `L${x},${y}`).join('') +
-        'Z'
-      );
+    case 'polygon':
+    case 'polyline': {
+      if (!s.points || !s.points.length) return '';
+      // polygonPathD honours s.curves, so a curved door-swing edge is punched
+      // out with the same arc the shape shows (was a straight L before).
+      return polygonPathD(s.points, s.curves, true);
     }
     case 'rect':
       return `M${s.x},${s.y}h${s.width}v${s.height}h${-s.width}Z`;

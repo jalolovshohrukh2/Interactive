@@ -11,6 +11,8 @@
 // Sizes are divided by displayScale so they stay constant in screen pixels.
 // Above this point count a shape is treated as freehand: outline only, no
 // individual vertex dots.
+import { hasCurves, polygonPathD, edgeMidpoint } from '../../lib/pathGeom.js';
+
 const MAX_VERTEX_HANDLES = 48;
 
 export default function SelectionHandles({ shapes, selectedIds, displayScale = 1 }) {
@@ -61,19 +63,51 @@ export default function SelectionHandles({ shapes, selectedIds, displayScale = 1
           Freehand shapes have dozens/hundreds of points — showing a dot for
           each would be a useless swarm, so we just show the outline and let
           the whole shape be moved/deleted. */}
-      {isPath && shape.points.length <= MAX_VERTEX_HANDLES &&
-        shape.points.map(([x, y], i) => (
-          <circle
-            key={i}
-            cx={x} cy={y} r={vertexSize}
-            fill="#a855f7" stroke="#fff" strokeWidth={sw}
-            style={{ cursor: 'move' }}
-            data-shape-id={shape.id}
-            data-vertex={i}
-          />
-        ))}
+      {isPath && shape.points.length <= MAX_VERTEX_HANDLES && (
+        <>
+          {/* Edge-midpoint handles (hollow diamonds): drag to bow the edge into
+              a curve, Alt+click to straighten it. */}
+          {edgeMidpoints(shape).map(({ x, y, edge }) => (
+            <rect
+              key={'e' + edge}
+              x={x - vertexSize} y={y - vertexSize}
+              width={vertexSize * 2} height={vertexSize * 2}
+              transform={`rotate(45 ${x} ${y})`}
+              fill="#fff" stroke="#a855f7" strokeWidth={sw}
+              style={{ cursor: 'pointer' }}
+              data-shape-id={shape.id}
+              data-edge={edge}
+            />
+          ))}
+          {/* Vertex handles (filled dots) on top. */}
+          {shape.points.map(([x, y], i) => (
+            <circle
+              key={i}
+              cx={x} cy={y} r={vertexSize}
+              fill="#a855f7" stroke="#fff" strokeWidth={sw}
+              style={{ cursor: 'move' }}
+              data-shape-id={shape.id}
+              data-vertex={i}
+            />
+          ))}
+        </>
+      )}
     </g>
   );
+}
+
+// Midpoint of every edge (curve midpoint if bowed), where the drag handle sits.
+function edgeMidpoints(shape) {
+  const pts = shape.points || [];
+  const n = pts.length;
+  const closed = shape.type === 'polygon';
+  const segs = closed ? n : n - 1;
+  const out = [];
+  for (let i = 0; i < segs; i++) {
+    const [mx, my] = edgeMidpoint(pts, shape.curves, i);
+    out.push({ x: mx, y: my, edge: i });
+  }
+  return out;
 }
 
 function OutlineShape({ shape, ...props }) {
@@ -85,10 +119,14 @@ function OutlineShape({ shape, ...props }) {
     return <ellipse cx={shape.cx} cy={shape.cy} rx={shape.rx} ry={shape.ry} {...finalProps} />;
   }
   if (shape.type === 'polygon') {
-    return <polygon points={shape.points.map((p) => p.join(',')).join(' ')} {...finalProps} />;
+    return hasCurves(shape)
+      ? <path d={polygonPathD(shape.points, shape.curves, true)} {...finalProps} />
+      : <polygon points={shape.points.map((p) => p.join(',')).join(' ')} {...finalProps} />;
   }
   if (shape.type === 'polyline') {
-    return <polyline points={shape.points.map((p) => p.join(',')).join(' ')} {...finalProps} />;
+    return hasCurves(shape)
+      ? <path d={polygonPathD(shape.points, shape.curves, false)} {...finalProps} />
+      : <polyline points={shape.points.map((p) => p.join(',')).join(' ')} {...finalProps} />;
   }
   return null;
 }

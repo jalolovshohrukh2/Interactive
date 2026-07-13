@@ -1,13 +1,16 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { distXY } from '../lib/coords.js';
 import { buildCandidates, snapMove, snapPoint, bbox } from '../lib/snap.js';
+import { magicWandPolygon, magicWandAddToShape } from '../lib/magicWand.js';
 import {
   makeBaseShape,
   moveShape,
   resizeShape,
   updateVertex,
+  setEdgeCurve,
   buildShapeFromDraft,
 } from '../lib/shapes.js';
+import { controlForMidpoint } from '../lib/pathGeom.js';
 import { CLOSE_POLYGON_THRESHOLD, MIN_SHAPE_SIZE } from '../constants.js';
 
 const SNAP_THRESHOLD_PX = 10;
@@ -24,7 +27,7 @@ const bboxIntersects = (a, b) =>
 // Resize and vertex-drag only run when exactly one shape is selected.
 //
 // Coords / pan / snap notes — see prior commits.
-export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory, viewport, makeBase = makeBaseShape, onBackgroundSelect }) {
+export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory, viewport, makeBase = makeBaseShape, onBackgroundSelect, wandTolerance = 32 }) {
   // Notify the app when the background image is clicked (select it) or when any
   // other interaction deselects it. Held in a ref so handlers don't need it in
   // their dep arrays.
@@ -56,6 +59,12 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
   // double-invokes updaters in dev, which was committing two shapes per polygon.
   const draftRef = useRef(null);
   draftRef.current = draft;
+
+  // Magic-wand tolerance, in a ref so pointer handlers stay dependency-free.
+  const wandTolRef = useRef(wandTolerance);
+  wandTolRef.current = wandTolerance;
+  // Guards against double-firing while a wand click is still computing.
+  const wandBusyRef = useRef(false);
 
   // Selection helpers — clean public API.
   const setSelectedIds = useCallback((ids) => setSelectedIdsState(ids), []);
@@ -128,6 +137,7 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
     const dataId = target.dataset?.shapeId;
     const handle = target.dataset?.handle;
     const vertexAttr = target.dataset?.vertex;
+    const edgeAttr = target.dataset?.edge;
     const pos = getPos(e);
 
     // Resize handle — only meaningful when exactly one shape is selected
@@ -148,7 +158,9 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
         const min = sh.type === 'polygon' ? 3 : 2;
         if (sh.points.length > min) {
           const i = parseInt(vertexAttr, 10);
-          const next = { ...sh, points: sh.points.filter((_, idx) => idx !== i) };
+          // Editing the vertex count invalidates per-edge curve indices, so
+          // straighten the shape rather than risk a misaligned curve.
+          const next = { ...sh, points: sh.points.filter((_, idx) => idx !== i), curves: undefined };
           // Treat as committed change with history.
           pushHistory(shapes);
           setShapesLive((arr) => arr.map((s) => (s.id === sh.id ? next : s)));
@@ -157,6 +169,22 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
       }
       selectOne(dataId);
       setInteraction({ type: 'vertex', index: parseInt(vertexAttr, 10), original: sh, snapshot: shapes });
+      return;
+    }
+
+    // Edge-midpoint drag — bow the edge into a curve. Alt+click straightens it.
+    if (edgeAttr !== undefined && dataId) {
+      const sh = shapes.find((s) => s.id === dataId);
+      if (!sh) return;
+      const i = parseInt(edgeAttr, 10);
+      if (e.altKey) {
+        pushHistory(shapes);
+        const next = setEdgeCurve(sh, i, null);
+        setShapesLive((arr) => arr.map((s) => (s.id === sh.id ? next : s)));
+        return;
+      }
+      selectOne(dataId);
+      setInteraction({ type: 'edgeCurve', index: i, original: sh, snapshot: shapes });
       return;
     }
 
@@ -207,6 +235,47 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
     if (!isInsideImage(pos)) return;
 
     const threshold = SNAP_THRESHOLD_PX / viewport.displayScale;
+
+    // Magic wand — flood-fill the clicked color into a polygon region.
+    //   plain click  → new shape (one room)
+    //   shift+click  → merge the clicked room INTO the selected shape as one
+    //                  region, bridging the wall between them (build an apartment
+    //                  from its rooms).
+    if (tool === 'wand') {
+      if (wandBusyRef.current) return;
+      const addTo = e.shiftKey && selectedIds.length === 1
+        ? shapes.find((s) => s.id === selectedIds[0])
+        : null;
+      wandBusyRef.current = true;
+      if (!addTo) { clearSelection(); setBg(false); }
+      const base = addTo ? null : makeBaseRef.current(shapes.length);
+      // No grow here — the wand always selects the clean interior so merging
+      // rooms never compounds. Grow is applied afterwards to the finished shape.
+      const job = addTo
+        ? magicWandAddToShape(image.url, image.width, image.height, pos.x, pos.y, wandTolRef.current, addTo)
+        : magicWandPolygon(image.url, image.width, image.height, pos.x, pos.y, wandTolRef.current);
+      job
+        .then(({ points, coverage }) => {
+          if (!points || points.length < 3) return;
+          if (coverage > 0.9) {
+            alert('That click flooded almost the whole image — click inside a colored area, or lower the wand tolerance.');
+            return;
+          }
+          if (addTo) {
+            pushHistory(shapes);
+            setShapesLive((arr) => arr.map((s) => (s.id === addTo.id ? { ...s, type: 'polygon', points } : s)));
+          } else {
+            const built = buildShapeFromDraft({ type: 'polygon', points }, base);
+            if (built) {
+              addShape(built);
+              selectOne(built.id);
+            }
+          }
+        })
+        .catch((err) => alert('Magic wand could not read the image: ' + err.message))
+        .finally(() => { wandBusyRef.current = false; });
+      return;
+    }
 
     if (tool === 'lasso') {
       clearSelection();
@@ -333,6 +402,20 @@ export function useDrawing({ image, shapes, addShape, setShapesLive, pushHistory
         )
       );
       setGuides(snapped.guides);
+      return;
+    }
+    if (interaction?.type === 'edgeCurve') {
+      const sh = interaction.original;
+      const n = sh.points.length;
+      const p0 = sh.points[interaction.index];
+      const p1 = sh.points[(interaction.index + 1) % n];
+      // Dragging back near the straight midpoint flattens the edge again.
+      const midX = (p0[0] + p1[0]) / 2, midY = (p0[1] + p1[1]) / 2;
+      const flatTol = 4 / viewport.displayScale;
+      const control = distXY(pos.x, pos.y, midX, midY) < flatTol
+        ? null
+        : controlForMidpoint(p0, p1, [pos.x, pos.y]);
+      setShapesLive((arr) => arr.map((s) => (s.id === sh.id ? setEdgeCurve(s, interaction.index, control) : s)));
       return;
     }
 
@@ -522,7 +605,8 @@ function insertVertexOnEdge(shape, pos) {
   if (best.dist > 12) return null;
   const next = [...pts];
   next.splice(best.idx + 1, 0, [best.proj.x, best.proj.y]);
-  return { ...shape, points: next };
+  // Adding a vertex changes the edge indexing — straighten to keep curves valid.
+  return { ...shape, points: next, curves: undefined };
 }
 
 function projectOnSegment(p, a, b) {

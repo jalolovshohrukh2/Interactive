@@ -1,5 +1,6 @@
 import { Square, Hexagon, Spline, Circle, X, Eye, EyeOff, Lock, Unlock } from 'lucide-react';
 import { HOVER_LABEL } from '../../constants.js';
+import { statusOf } from '../../lib/status.js';
 
 const ICONS = {
   rect: Square,
@@ -24,8 +25,11 @@ export default function ShapeRow({ shape, active, onSelect, onDelete, onUpdate }
       <div className={`w-1 h-7 rounded-full ${active ? 'bg-violet-500' : 'bg-transparent'}`} />
       <TypeIcon size={13} className={active ? 'text-violet-400' : 'text-[#6a6a70]'} />
       <div className="flex-1 min-w-0">
-        <div className={`text-[13px] font-mono truncate ${active ? 'text-white' : 'text-[#c4c4c8]'}`}>
-          .{shape.className || '(unnamed)'}
+        <div className={`text-[13px] font-mono truncate flex items-center gap-1.5 ${active ? 'text-white' : 'text-[#c4c4c8]'}`}>
+          {statusOf(shape) && (
+            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: statusOf(shape).color }} title={statusOf(shape).label} />
+          )}
+          <span className="truncate">.{shape.className || '(unnamed)'}</span>
         </div>
         <div className="text-[10px] text-[#5a5a60] uppercase tracking-wider mt-0.5">
           {shape.type} · {HOVER_LABEL[shape.hover]}

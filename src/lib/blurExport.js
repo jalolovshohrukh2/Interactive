@@ -3,6 +3,7 @@
 //
 // The Blur workspace is the inverse of a spotlight: the shapes mark the areas
 // that stay sharp; everything else is softened by a Gaussian blur.
+import { tracePolygonPath } from './pathGeom.js';
 
 function loadImage(url) {
   return new Promise((resolve, reject) => {
@@ -30,9 +31,7 @@ function tracePath(ctx, shape) {
     case 'polyline': {
       const pts = shape.points || [];
       if (!pts.length) break;
-      ctx.moveTo(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-      ctx.closePath();
+      tracePolygonPath(ctx, pts, shape.curves, true, 0, 0);
       break;
     }
     default:
