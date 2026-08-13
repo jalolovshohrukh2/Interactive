@@ -9,7 +9,7 @@ const ICONS = {
   ellipse: Circle,
 };
 
-export default function ShapeRow({ shape, active, onSelect, onDelete, onUpdate }) {
+export default function ShapeRow({ shape, active, onSelect, onDelete, onUpdate, onEditStart, onEditEnd }) {
   const TypeIcon = ICONS[shape.type] || Square;
   const onClick = (e) => onSelect(shape.id, { shift: e.shiftKey });
   const toggleHidden = (e) => { e.stopPropagation(); onUpdate(shape.id, { hidden: !shape.hidden }); };
@@ -25,13 +25,28 @@ export default function ShapeRow({ shape, active, onSelect, onDelete, onUpdate }
       <div className={`w-1 h-7 rounded-full ${active ? 'bg-violet-500' : 'bg-transparent'}`} />
       <TypeIcon size={13} className={active ? 'text-violet-400' : 'text-[#6a6a70]'} />
       <div className="flex-1 min-w-0">
-        <div className={`text-[13px] font-mono truncate flex items-center gap-1.5 ${active ? 'text-white' : 'text-[#c4c4c8]'}`}>
+        <div className="flex items-center gap-1">
           {statusOf(shape) && (
             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: statusOf(shape).color }} title={statusOf(shape).label} />
           )}
-          <span className="truncate">.{shape.className || '(unnamed)'}</span>
+          <span className="text-[13px] font-mono flex-shrink-0 text-[#6a6a70]">.</span>
+          {/* Inline rename. Editing disables the row's drag (see ShapeList) so
+              you can select text instead of starting a reorder. */}
+          <input
+            type="text"
+            data-shape-name
+            value={shape.className || ''}
+            placeholder="(unnamed)"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onFocus={() => { onSelect(shape.id); onEditStart?.(); }}
+            onBlur={() => onEditEnd?.()}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
+            onChange={(e) => onUpdate(shape.id, { className: e.target.value })}
+            className={`min-w-0 flex-1 bg-transparent text-[13px] font-mono outline-none rounded px-1 py-0.5 focus:bg-[#0a0a0c] focus:ring-1 focus:ring-violet-500/40 transition-colors ${active ? 'text-white' : 'text-[#c4c4c8]'}`}
+          />
         </div>
-        <div className="text-[10px] text-[#5a5a60] uppercase tracking-wider mt-0.5">
+        <div className="text-[10px] text-[#5a5a60] uppercase tracking-wider mt-0.5 pl-1">
           {shape.type} · {HOVER_LABEL[shape.hover]}
         </div>
       </div>

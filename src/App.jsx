@@ -302,10 +302,13 @@ export default function App() {
 
   const handleUndo = useCallback(() => {
     if (drawing.popDraftPoint()) return;
-    // A just-deleted or just-baked image is the freshest undoable action (the
-    // flag clears the moment any shape is edited), so undo reverts it first.
+    // A deleted or reframed image must be restored first — undoing a shape alone
+    // would leave you imageless or misaligned.
+    if (project.imageUndoNeedsPriority) { project.restoreImage(); return; }
+    // Otherwise shape edits win, so Ctrl+Z never eats your shape work. A plain
+    // bake-in ("Save to image") is only reverted once there's no shape edit left.
+    if (activeColl.canUndo) { activeColl.undo(); return; }
     if (project.canRestoreImage) { project.restoreImage(); return; }
-    activeColl.undo();
   }, [drawing, activeColl, project]);
 
   // Single-row click in the sidebar: replace selection.

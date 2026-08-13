@@ -208,6 +208,11 @@ export function useProject() {
     frameImage,
     restoreImage,
     canRestoreImage: imageUndoable && !!deletedImage,
+    // Restore should out-rank shape-undo ONLY when it's the sole coherent undo:
+    // the image was deleted (no canvas to edit), or a reframe shifted the shapes
+    // with it (undoing a shape alone would misalign). A plain bake-in defers to
+    // shape-undo, so Ctrl+Z never eats shape edits.
+    imageUndoNeedsPriority: imageUndoable && !!deletedImage && (!image || !!stashedShapesRef.current),
     loadSnapshot,
 
     // Back-compat flat hotspot API (used throughout App / Sidebar).

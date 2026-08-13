@@ -337,6 +337,8 @@ function ShapeList({ shapes, selectedSet, onSelect, onDelete, onUpdate, onMoveSh
   const [dragIdx, setDragIdx] = useState(null);
   const [overIdx, setOverIdx] = useState(null);
   const [overPos, setOverPos] = useState('before');
+  // Row being renamed — drag is disabled on it so text selection works.
+  const [editingId, setEditingId] = useState(null);
 
   const onDragStart = (e, i) => {
     setDragIdx(i);
@@ -388,13 +390,13 @@ function ShapeList({ shapes, selectedSet, onSelect, onDelete, onUpdate, onMoveSh
             return (
               <div
                 key={s.id}
-                draggable
+                draggable={editingId !== s.id}
                 onDragStart={(e) => onDragStart(e, i)}
                 onDragOver={(e) => onDragOver(e, i)}
                 onDrop={onDrop}
                 onDragEnd={onDragEnd}
                 className={`relative ${dragIdx === i ? 'opacity-40' : ''}`}
-                style={{ cursor: 'grab' }}
+                style={{ cursor: editingId === s.id ? 'default' : 'grab' }}
               >
                 {showIndicator && overPos === 'before' && (
                   <div className="absolute top-0 left-0 right-0 h-0.5 bg-violet-500 z-10 pointer-events-none" />
@@ -405,6 +407,8 @@ function ShapeList({ shapes, selectedSet, onSelect, onDelete, onUpdate, onMoveSh
                   onSelect={onSelect}
                   onDelete={() => onDelete(s.id)}
                   onUpdate={onUpdate}
+                  onEditStart={() => setEditingId(s.id)}
+                  onEditEnd={() => setEditingId((id) => (id === s.id ? null : id))}
                 />
                 {showIndicator && overPos === 'after' && (
                   <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-violet-500 z-10 pointer-events-none" />
