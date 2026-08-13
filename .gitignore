@@ -31,3 +31,7 @@ dist-ssr
 
 # Local preview-tool config
 .claude/
+
+# Personal files that live in this folder but are not part of the project
+Vuslat_CV_Form.html
+Vuslat_Recruitment_CRM.xlsx
